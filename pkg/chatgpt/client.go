@@ -25,7 +25,7 @@ func NewChatGPT(ctx context.Context) *ChatGPT {
 
 // SendMessage sends a message to ChatGPT and returns the response
 func (c *ChatGPT) SendMessage(message string) (string, error) {
-	log.Printf("📤 Sending message: %s", message)
+	// Removed log message to avoid duplicate with CLI spinner
 
 	// 1. Count existing assistant messages before sending a new one.
 	var initialMessageCount int
@@ -48,10 +48,10 @@ func (c *ChatGPT) SendMessage(message string) (string, error) {
 		return "", fmt.Errorf("failed to send message: %v", err)
 	}
 
-	log.Println("⏳ Waiting for response to complete...")
+	// Removed log message to avoid interference with CLI spinner
 
-	// 3. New robust polling logic.
-	waitCtx, cancel := context.WithTimeout(c.ctx, 180*time.Second)
+	// 3. New robust polling logic with longer timeout for long responses.
+	waitCtx, cancel := context.WithTimeout(c.ctx, 300*time.Second) // Increased to 5 minutes
 	defer cancel()
 
 	pollScript := fmt.Sprintf(`
@@ -66,7 +66,7 @@ func (c *ChatGPT) SendMessage(message string) (string, error) {
 		return "", fmt.Errorf("timed out waiting for response to complete: %v", err)
 	}
 
-	log.Println("✅ Response complete!")
+	// Response complete - removed log to avoid interference with CLI
 	time.Sleep(300 * time.Millisecond) // A final small delay for stability
 
 	// 4. Get the content of the last message.

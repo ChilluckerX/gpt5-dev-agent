@@ -1,0 +1,200 @@
+package chatgpt
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/chromedp/chromedp"
+)
+
+// Selectors are now hardcoded for stability and simplicity.
+const (
+	InputElement     = `#prompt-textarea`
+	SubmitButton     = `button[data-testid="send-button"]`
+	StopButton       = `button[data-testid="stop-button"]`
+	LastResponse     = `div[data-message-author-role="assistant"]:last-child .markdown`
+	NewChatButton    = `a[href="/"]`
+	HistoryLink      = `a[href^="/c/"]`
+	AssistantMessage = `div[data-message-author-role="assistant"]`
+)
+
+// ChatGPT represents a ChatGPT session
+type ChatGPT struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+// NewChatGPT creates a new ChatGPT session
+// Note: It no longer takes selectors as an argument.
+func NewChatGPT(ctx context.Context) *ChatGPT {
+	return &ChatGPT{
+		ctx: ctx,
+	}
+}
+
+// SendMessage sends a message to ChatGPT and returns the response
+func (c *ChatGPT) SendMessage(message string) (string, error) {
+	log.Printf("📤 Sending message: %s", message)
+
+	// 1. Count existing assistant messages before sending a new one.
+	var initialMessageCount int
+	countScript := fmt.Sprintf(`document.querySelectorAll('%s').length`, AssistantMessage)
+	if err := chromedp.Run(c.ctx, chromedp.Evaluate(countScript, &initialMessageCount)); err != nil {
+		initialMessageCount = 0
+		log.Println("   - No initial assistant messages found, setting count to 0.")
+	} else {
+		log.Printf("   - Initial assistant message count: %d", initialMessageCount)
+	}
+
+	// 2. Send the message.
+	err := chromedp.Run(c.ctx,
+		chromedp.WaitVisible(InputElement, chromedp.ByQuery),
+		chromedp.SendKeys(InputElement, message, chromedp.ByQuery),
+		chromedp.WaitEnabled(SubmitButton, chromedp.ByQuery),
+		chromedp.Click(SubmitButton, chromedp.ByQuery),
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to send message: %v", err)
+	}
+
+	log.Println("⏳ Waiting for response to complete...")
+
+	// 3. New robust polling logic.
+	// This single poll waits for the condition where a new message has appeared
+	// AND the stop button is no longer visible, which marks the true end of a response.
+	waitCtx, cancel := context.WithTimeout(c.ctx, 180*time.Second)
+	defer cancel()
+
+	pollScript := fmt.Sprintf(`
+		(() => {
+			const assistantMessages = document.querySelectorAll('%s');
+			const stopButton = document.querySelector('%s');
+			return assistantMessages.length > %d && !stopButton;
+		})()
+	`, AssistantMessage, StopButton, initialMessageCount)
+
+	if err := chromedp.Run(waitCtx, chromedp.Poll(pollScript, nil)); err != nil {
+		return "", fmt.Errorf("timed out waiting for response to complete: %v", err)
+	}
+
+	log.Println("✅ Response complete!")
+	time.Sleep(300 * time.Millisecond) // A final small delay for stability
+
+	// 4. Get the content of the last message.
+	var response string
+	script := fmt.Sprintf(`
+        (function() {
+            const elements = document.querySelectorAll('%s');
+            if (elements.length === 0) return '';
+            const lastElement = elements[elements.length - 1];
+            return lastElement ? lastElement.innerText : '';
+        })();
+    `, LastResponse)
+
+	err = chromedp.Run(c.ctx, chromedp.Evaluate(script, &response))
+	if err != nil {
+		return "", fmt.Errorf("failed to get response text: %v", err)
+	}
+	if response == "" {
+		return "", fmt.Errorf("received empty response from assistant")
+	}
+	return strings.TrimSpace(response), nil
+}
+
+// StartNewChat starts a new chat session
+func (c *ChatGPT) StartNewChat() error {
+	log.Println("🆕 Starting new chat...")
+	err := chromedp.Run(c.ctx,
+		chromedp.Click(NewChatButton, chromedp.ByQuery),
+		chromedp.WaitVisible(InputElement, chromedp.ByQuery),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to start new chat: %v", err)
+	}
+	log.Println("✅ New chat started")
+	return nil
+}
+
+// GetChatHistory gets the list of chat history
+func (c *ChatGPT) GetChatHistory() ([]ChatHistoryItem, error) {
+	log.Println("📜 Getting chat history...")
+	var historyItems []ChatHistoryItem
+	script := fmt.Sprintf(`
+        (function() {
+            const links = document.querySelectorAll('%s');
+            const items = [];
+            links.forEach(link => {
+                if (link.href && link.innerText) {
+                    items.push({ url: link.href, title: link.innerText.trim() });
+                }
+            });
+            return items;
+        })();
+    `, HistoryLink)
+	var rawItems []struct {
+		URL   string `json:"url"`
+		Title string `json:"title"`
+	}
+	err := chromedp.Run(c.ctx, chromedp.Evaluate(script, &rawItems))
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute script to get history: %v", err)
+	}
+	for i, item := range rawItems {
+		if i >= 10 {
+			break
+		}
+		historyItems = append(historyItems, ChatHistoryItem{
+			Title: item.Title,
+			URL:   item.URL,
+			ID:    extractChatID(item.URL),
+		})
+	}
+	log.Printf("📜 Found %d chat history items", len(historyItems))
+	return historyItems, nil
+}
+
+// OpenChat opens a specific chat by ID
+func (c *ChatGPT) OpenChat(chatID string) error {
+	log.Printf("📂 Opening chat: %s", chatID)
+	url := fmt.Sprintf("https://chatgpt.com/c/%s", chatID)
+	err := chromedp.Run(c.ctx,
+		chromedp.Navigate(url),
+		chromedp.WaitVisible(InputElement, chromedp.ByQuery),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to open chat: %v", err)
+	}
+	log.Println("✅ Chat opened")
+	return nil
+}
+
+// ChatHistoryItem represents a chat history item
+type ChatHistoryItem struct {
+	Title string
+	URL   string
+	ID    string
+}
+
+func extractChatID(href string) string {
+	parts := strings.Split(href, "/")
+	if len(parts) > 0 {
+		return parts[len(parts)-1]
+	}
+	return ""
+}
+
+// WaitForPageLoad waits for ChatGPT to be ready
+func (c *ChatGPT) WaitForPageLoad() error {
+	log.Println("⏳ Waiting for page to load...")
+	err := chromedp.Run(c.ctx,
+		chromedp.WaitVisible(InputElement, chromedp.ByQuery),
+	)
+	if err != nil {
+		return fmt.Errorf("ChatGPT page did not load correctly: %v", err)
+	}
+	log.Println("✅ Page loaded successfully.")
+	return err
+}
