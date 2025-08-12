@@ -16,3 +16,12 @@ Do this task first!
 
 
 So,the task above was done !
+
+
+Now for the 2nd task..
+
+
+Saya bercadang setiap kali user chat dia akan auto hantar satu system_prompt..
+
+
+So dia akan reply dalam ni :

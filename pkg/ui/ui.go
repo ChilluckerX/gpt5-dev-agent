@@ -3,9 +3,10 @@ package ui
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
-	
+
 	"golang.org/x/term"
 )
 
@@ -35,24 +36,24 @@ type rgb struct {
 func createRainbowGradient(text string) string {
 	// Define the key colors for our rainbow gradient
 	rainbow := []rgb{
-		{r: 255, g: 0, b: 0},     // Red
-		{r: 255, g: 127, b: 0},    // Orange
-		{r: 255, g: 255, b: 0},    // Yellow
-		{r: 0, g: 255, b: 0},     // Green
-		{r: 0, g: 0, b: 255},     // Blue
-		{r: 75, g: 0, b: 130},    // Indigo
-		{r: 148, g: 0, b: 211},   // Violet
+		{r: 255, g: 0, b: 0},   // Red
+		{r: 255, g: 127, b: 0}, // Orange
+		{r: 255, g: 255, b: 0}, // Yellow
+		{r: 0, g: 255, b: 0},   // Green
+		{r: 0, g: 0, b: 255},   // Blue
+		{r: 75, g: 0, b: 130},  // Indigo
+		{r: 148, g: 0, b: 211}, // Violet
 	}
 
 	var builder strings.Builder
 	lines := strings.Split(text, "\n")
-	
+
 	for _, line := range lines {
 		if len(strings.TrimSpace(line)) == 0 {
 			builder.WriteString("\n")
 			continue
 		}
-		
+
 		// We use a trick to find the first and last non-space character
 		// to make the gradient tighter and more vibrant.
 		startIdx := strings.IndexFunc(line, func(r rune) bool { return r != ' ' })
@@ -71,7 +72,7 @@ func createRainbowGradient(text string) string {
 
 			// Calculate the character's position within the visible art (0.0 to 1.0)
 			pos := float64(i-startIdx) / float64(endIdx-startIdx)
-			
+
 			// Determine which two colors to blend
 			colorPos := pos * float64(len(rainbow)-1)
 			idx1 := int(colorPos)
@@ -97,33 +98,23 @@ func createRainbowGradient(text string) string {
 	return builder.String()
 }
 
-
 // PrintBanner prints the application banner
 func PrintBanner() {
 	// Clear screen for better presentation
 	ClearScreen()
-	
+
 	// ASCII Art for CHATGPT-CLI
 	// We define it as a raw string literal first
 	bannerArt := `
- ██████╗██╗  ██╗ █████╗ ████████╗ ██████╗ ██████╗ ████████╗      ██████╗██╗     ██╗
-██╔════╝██║  ██║██╔══██╗╚══██╔══╝██╔════╝ ██╔══██╗╚══██╔══╝     ██╔════╝██║     ██║
-██║     ███████║███████║   ██║   ██║  ███╗██████╔╝   ██║        ██║     ██║     ██║
-██║     ██╔══██║██╔══██║   ██║   ██║   ██║██╔═══╝    ██║        ██║     ██║     ██║
-╚██████╗██║  ██║██║  ██║   ██║   ╚██████╔╝██║        ██║███████╗╚██████╗███████╗██║
- ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝    ╚═════╝ ╚═╝        ╚═╝╚══════╝ ╚═════╝╚══════╝╚═╝`
+ ██████  ██████  ████████ ███████       ██████  ███████ ██    ██ 
+██       ██   ██    ██    ██            ██   ██ ██      ██    ██ 
+██   ███ ██████     ██    ███████ █████ ██   ██ █████   ██    ██ 
+██    ██ ██         ██         ██       ██   ██ ██       ██  ██  
+ ██████  ██         ██    ███████       ██████  ███████   ████`
 
 	// Apply the rainbow gradient effect and print it
 	fmt.Print(Bold + createRainbowGradient(bannerArt) + Reset)
-	
-	// The rest of your banner remains the same
-	fmt.Println(Purple + Bold + `
-                    ╔═══════════════════════════════════════════════════════╗` + Reset)
-	fmt.Println(Purple + `                    ║` + Yellow + Bold + `          🤖 AI-Powered Terminal Interface          ` + Purple + `║` + Reset)
-	fmt.Println(Purple + `                    ║` + Green + `             🚀 Go Edition - High Performance        ` + Purple + `║` + Reset)
-	fmt.Println(Purple + `                    ║` + Cyan + `              🇲🇾 Advanced Scraper Technology         ` + Purple + `║` + Reset)
-	fmt.Println(Purple + Bold + `                    ╚═══════════════════════════════════════════════════════╝` + Reset)
-	
+
 	// Animated-style separator
 	fmt.Println()
 	fmt.Print(Red + "▓")
@@ -132,7 +123,7 @@ func PrintBanner() {
 	fmt.Print(Cyan + "▓")
 	fmt.Print(Blue + "▓")
 	fmt.Print(Purple + "▓")
-	fmt.Print(strings.Repeat(White + "▓", 60))
+	fmt.Print(strings.Repeat(White+"▓", 60))
 	fmt.Print(Purple + "▓")
 	fmt.Print(Blue + "▓")
 	fmt.Print(Cyan + "▓")
@@ -141,9 +132,10 @@ func PrintBanner() {
 	fmt.Print(Red + "▓" + Reset)
 	fmt.Println()
 	fmt.Println()
-	
+
 	// Status message
-	fmt.Println(Green + Bold + "                           ✨ Initializing ChatGPT CLI... ✨" + Reset)
+	fmt.Println(Green + Bold + "✨ Initializing GPT5-DEV Agent CLI... ✨" + Reset)
+	fmt.Println("Developer : @shahirul_aiman")
 	fmt.Println()
 }
 
@@ -185,6 +177,38 @@ func TypeText(text string, delay time.Duration) {
 	}
 }
 
+// DebugResponse prints raw response content for debugging
+func DebugResponse(response string) {
+	fmt.Println("\n" + Yellow + "🔍 DEBUG: Raw Response Content" + Reset)
+	fmt.Println(Blue + "=" + strings.Repeat("=", 50) + Reset)
+
+	lines := strings.Split(response, "\n")
+	for i, line := range lines {
+		// Show line numbers and raw content
+		fmt.Printf(Dim+"%3d: "+Reset, i+1)
+
+		// Show special characters
+		displayLine := strings.ReplaceAll(line, "\t", Cyan+"[TAB]"+Reset)
+		displayLine = strings.ReplaceAll(displayLine, "    ", Cyan+"[4SP]"+Reset)
+
+		// Highlight potential code markers
+		if strings.Contains(line, "```") {
+			displayLine = strings.ReplaceAll(displayLine, "```", Red+"```"+Reset)
+		}
+		if strings.Contains(line, "Copy") {
+			displayLine = strings.ReplaceAll(displayLine, "Copy", Yellow+"Copy"+Reset)
+		}
+		if strings.Contains(line, "Edit") {
+			displayLine = strings.ReplaceAll(displayLine, "Edit", Yellow+"Edit"+Reset)
+		}
+
+		fmt.Printf("%s\n", displayLine)
+	}
+
+	fmt.Println(Blue + "=" + strings.Repeat("=", 50) + Reset)
+	fmt.Printf(Green+"Total lines: %d"+Reset+"\n\n", len(lines))
+}
+
 // GetTerminalWidth gets the current terminal width
 func GetTerminalWidth() int {
 	// Try to get terminal width from stdout
@@ -198,55 +222,87 @@ func GetTerminalWidth() int {
 		}
 		return width
 	}
-	
+
 	// Fallback to 80 if unable to detect
 	return 80
 }
 
 // Code highlighting colors
 const (
-	NavyBlue = "\033[48;5;17m"  // Navy blue background
-	CodeText = "\033[97m"       // Bright white text for code
+	NavyBlue = "\033[48;5;17m" // Navy blue background
+	CodeText = "\033[97m"      // Bright white text for code
+)
+
+// Regex patterns for fence detection
+var (
+	fenceStart = regexp.MustCompile(`^\s*(` + "```" + `|~~~)\s*([A-Za-z0-9+#._-]*)\s*$`)
+	fenceEnd   = regexp.MustCompile(`^\s*(` + "```" + `|~~~)\s*$`)
 )
 
 // ProcessResponseWithCodeHighlight processes response text and applies code highlighting
 func ProcessResponseWithCodeHighlight(text string) []ResponseLine {
 	lines := strings.Split(text, "\n")
 	var result []ResponseLine
-	
+
 	inCodeBlock := false
-	codeLanguage := ""
-	
-	for i, line := range lines {
-		trimmedLine := strings.TrimSpace(line)
-		
-		// Check if this line starts a code block
-		if isCodeLanguageLine(trimmedLine) {
-			codeLanguage = trimmedLine
+	codeLang := ""
+	skipNext := 0
+
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		trim := strings.TrimSpace(line)
+
+		// Skip lines if we're in skip mode
+		if skipNext > 0 {
+			skipNext--
+			continue
+		}
+
+		// Check if this is a language declaration line
+		if isLanguageDeclaration(trim) {
+			codeLang = trim
 			inCodeBlock = true
-			// Skip the language line, Copy, and Edit lines
+
+			// Skip the language line and check for Copy/Edit lines
+			skipCount := 1 // Skip language line
+
+			// Check next lines for Copy/Edit and skip them too
+			for j := i + 1; j < len(lines) && j < i+3; j++ {
+				nextTrim := strings.TrimSpace(lines[j])
+				if nextTrim == "Copy" || nextTrim == "Edit" {
+					skipCount++
+				} else {
+					break
+				}
+			}
+
+			skipNext = skipCount - 1 // -1 because we'll increment i at end of loop
 			continue
 		}
-		
-		// Skip "Copy" and "Edit" lines after language declaration
-		if inCodeBlock && (trimmedLine == "Copy" || trimmedLine == "Edit") {
-			continue
-		}
-		
+
 		// Check if we should end the code block
-		if inCodeBlock && shouldEndCodeBlock(line, lines, i) {
-			inCodeBlock = false
-			codeLanguage = ""
+		if inCodeBlock {
+			// End code block if we hit empty line followed by non-code content
+			if trim == "" && i+1 < len(lines) {
+				nextLine := strings.TrimSpace(lines[i+1])
+				if nextLine != "" && !isIndentedCodeLine(lines[i+1]) && !isLanguageDeclaration(nextLine) {
+					// Check if next line looks like explanation
+					if isExplanationLine(nextLine) {
+						inCodeBlock = false
+						codeLang = ""
+					}
+				}
+			}
 		}
-		
-		// Add the line with appropriate formatting
+
+		// Add line with appropriate formatting
 		result = append(result, ResponseLine{
 			Text:     line,
 			IsCode:   inCodeBlock,
-			Language: codeLanguage,
+			Language: codeLang,
 		})
 	}
-	
+
 	return result
 }
 
@@ -257,14 +313,48 @@ type ResponseLine struct {
 	Language string
 }
 
-// isCodeLanguageLine checks if a line indicates the start of a code block
-func isCodeLanguageLine(line string) bool {
+// parseFenceStart checks if a line starts a code fence and returns language
+func parseFenceStart(line string) (ok bool, lang string) {
+	m := fenceStart.FindStringSubmatch(line)
+	if m == nil {
+		return false, ""
+	}
+	lang = strings.ToLower(strings.TrimSpace(m[2]))
+	return true, lang
+}
+
+// isFenceEnd checks if a line ends a code fence
+func isFenceEnd(line string) bool {
+	return fenceEnd.MatchString(line)
+}
+
+// isIndentedCodeLine checks if a line is indented (4 spaces or tab)
+func isIndentedCodeLine(line string) bool {
+	return strings.HasPrefix(line, "    ") || strings.HasPrefix(line, "\t")
+}
+
+// shouldStopIndentedBlock determines if we should end the indented code block
+func shouldStopIndentedBlock(next string) bool {
+	trim := strings.TrimSpace(next)
+	if trim == "" {
+		return true // empty line
+	}
+	if isIndentedCodeLine(next) {
+		return false // still indented
+	}
+	// next line is not indented => end code block
+	return true
+}
+
+// isLanguageDeclaration checks if a line is a programming language declaration
+func isLanguageDeclaration(line string) bool {
 	commonLanguages := []string{
-		"python", "javascript", "java", "go", "rust", "c++", "c", "php", 
+		"python", "javascript", "java", "go", "rust", "c++", "c", "php",
 		"ruby", "swift", "kotlin", "typescript", "html", "css", "sql",
 		"bash", "shell", "powershell", "json", "xml", "yaml", "dockerfile",
+		"markdown", "text", "plaintext", "output",
 	}
-	
+
 	line = strings.ToLower(strings.TrimSpace(line))
 	for _, lang := range commonLanguages {
 		if line == lang {
@@ -274,40 +364,24 @@ func isCodeLanguageLine(line string) bool {
 	return false
 }
 
-// shouldEndCodeBlock determines if we should end the current code block
-func shouldEndCodeBlock(currentLine string, allLines []string, currentIndex int) bool {
-	trimmed := strings.TrimSpace(currentLine)
-	
-	// Empty line followed by non-indented text usually ends code
-	if trimmed == "" && currentIndex+1 < len(allLines) {
-		nextLine := strings.TrimSpace(allLines[currentIndex+1])
-		if nextLine != "" && !strings.HasPrefix(allLines[currentIndex+1], "    ") && !strings.HasPrefix(allLines[currentIndex+1], "\t") {
-			// Check if next line looks like explanation text
-			if isExplanationText(nextLine) {
-				return true
-			}
-		}
-	}
-	
-	return false
-}
-
-// isExplanationText checks if a line looks like explanation rather than code
-func isExplanationText(line string) bool {
+// isExplanationLine checks if a line looks like explanation text
+func isExplanationLine(line string) bool {
 	// Common patterns that indicate explanation text
-	explanationStarters := []string{
-		"kalau", "jika", "untuk", "ini akan", "kod ini", "awak boleh", 
-		"saya", "anda", "bila", "apabila", "contoh", "example",
+	explanationPatterns := []string{
+		"output:", "hasil:", "contoh:", "example:", "note:", "catatan:",
+		"kalau", "jika", "untuk", "ini akan", "kod ini", "awak boleh",
+		"saya", "anda", "bila", "apabila", "nak saya", "boleh juga",
 		"this will", "this code", "you can", "if you", "when you",
+		"1.", "2.", "3.", "4.", "5.", // numbered lists
 	}
-	
+
 	lowerLine := strings.ToLower(line)
-	for _, starter := range explanationStarters {
-		if strings.Contains(lowerLine, starter) {
+	for _, pattern := range explanationPatterns {
+		if strings.Contains(lowerLine, pattern) {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -318,6 +392,12 @@ func PrintSeparator() {
 
 // PrintWelcome prints the welcome message
 func PrintWelcome() {
+	// Get current directory
+	currentDir, err := os.Getwd()
+	if err != nil {
+		currentDir = "Unknown"
+	}
+	
 	fmt.Println(Purple + "💡 Commands:" + Reset)
 	fmt.Println("  " + Cyan + "/help" + Reset + "    - Show help")
 	fmt.Println("  " + Cyan + "/new" + Reset + "     - Start new chat")
@@ -326,4 +406,5 @@ func PrintWelcome() {
 	fmt.Println("  " + Cyan + "/quit" + Reset + "    - Exit")
 	fmt.Println()
 	fmt.Println(Green + "💬 Just type your message to chat with ChatGPT!" + Reset)
+	fmt.Println(Dim + "📁 Working in: " + currentDir + Reset)
 }

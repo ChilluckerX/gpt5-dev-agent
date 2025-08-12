@@ -17,12 +17,13 @@ func main() {
 	// Print banner
 	ui.PrintBanner()
 
-	// --- Base setup for the browser (Go scraper style) ---
+	// --- Unified startup process with single progress indicator ---
 	spinner := ui.NewSquareSpinner()
-	spinner.Start("Setting up browser...")
+	spinner.Start("Initializing ChatGPT CLI...")
 
+	// Browser setup
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", true),           // Keep visible for CLI interaction
+		chromedp.Flag("headless", true), // 
 		chromedp.Flag("enable-automation", false), // Critical!
 		chromedp.Flag("disable-extensions", false),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"), // Critical!
@@ -32,75 +33,58 @@ func main() {
 	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
 	defer allocCancel()
 
-	// --- Create a single, long-lived browser context (Go scraper approach) ---
 	ctx, ctxCancel := chromedp.NewContext(allocCtx)
 	defer ctxCancel()
 
-	spinner.Stop()
-	ui.PrintSuccess("Browser setup complete")
-
-	// --- 1. Initial Setup: Load existing ChatGPT cookies ---
-	spinner = ui.NewSquareSpinner()
-	spinner.Start("Loading ChatGPT cookies...")
-
+	// Load cookies
+	spinner.Update("Loading saved session...")
+	time.Sleep(500 * time.Millisecond) // Brief pause for smooth transition
 	if err := chromedp.Run(ctx, browser.LoadCookiesAction()); err != nil {
-		spinner.Stop()
-		ui.PrintWarning("Could not load cookies - you may need to login manually")
-	} else {
-		spinner.Stop()
-		ui.PrintSuccess("Cookies loaded successfully")
+		// Continue silently - cookies not critical
 	}
 
-	// --- 2. Navigate to ChatGPT (Go scraper technique) ---
-	spinner = ui.NewSquareSpinner()
-	spinner.Start("Navigating to ChatGPT...")
-
+	// Navigate to ChatGPT
+	spinner.Update("Connecting to ChatGPT...")
+	time.Sleep(300 * time.Millisecond) // Brief pause for smooth transition
 	targetURL := config.BaseURL
 	if err := chromedp.Run(ctx, chromedp.Navigate(targetURL)); err != nil {
 		spinner.Stop()
-		ui.PrintError("Failed to navigate to ChatGPT")
+		ui.PrintError("Failed to connect to ChatGPT")
 		log.Fatalf("Navigation error: %v", err)
 	}
 
-	// --- Add a reload step to handle potential blank page on first load (Go scraper trick!) ---
-	spinner.Update("Applying Go scraper reload technique...")
-	time.Sleep(3 * time.Second) // Wait a moment for the initial (potentially blank) page
+	// Reload technique for stability
+	spinner.Update("Optimizing connection...")
+	time.Sleep(3 * time.Second)
 	if err := chromedp.Run(ctx, chromedp.Reload()); err != nil {
 		spinner.Stop()
-		ui.PrintError("Failed to reload page")
+		ui.PrintError("Connection optimization failed")
 		log.Fatalf("Reload error: %v", err)
 	}
 
-	// --- 3. Wait for ChatGPT to load ---
-	spinner.Update("Waiting for ChatGPT to load...")
+	// Wait for ChatGPT to load
+	spinner.Update("Verifying interface...")
+	time.Sleep(300 * time.Millisecond) // Brief pause for smooth transition
 	if err := chromedp.Run(ctx, browser.WaitForChatGPTLoad()); err != nil {
 		spinner.Stop()
-		ui.PrintWarning("Could not confirm ChatGPT loaded properly")
-		ui.PrintInfo("Please make sure you're logged in and can see the chat interface")
-	} else {
-		spinner.Stop()
-		ui.PrintSuccess("ChatGPT loaded successfully")
+		ui.PrintWarning("Interface verification incomplete - please ensure you're logged in")
+		ui.PrintInfo("You may need to login manually in the browser window")
+		return
 	}
 
-	// --- 4. Create ChatGPT client and CLI ---
+	// Create ChatGPT client and final checks
 	chatgptClient := chatgpt.NewChatGPT(ctx)
-
-	// Wait for page to be ready
-	spinner = ui.NewSpinner()
-	spinner.Start("Checking page readiness...")
+	spinner.Update("Finalizing setup...")
+	time.Sleep(300 * time.Millisecond) // Brief pause for smooth transition
 	if err := chatgptClient.WaitForPageLoad(); err != nil {
-		spinner.Stop()
-		ui.PrintWarning("Page load check failed - continuing anyway")
-	} else {
-		spinner.Stop()
-		ui.PrintSuccess("Page is ready")
+		// Continue anyway - not critical
 	}
+
+	spinner.Stop()
+	ui.PrintSuccess("GPT5-DEV Agent CLI ready! 🚀")
 
 	// Create and start CLI
 	cliApp := cli.NewCLI(chatgptClient)
-
-	ui.PrintSuccess("ChatGPT CLI is ready!")
-	ui.PrintInfo("Browser window will stay open for interaction")
 
 	// Start the CLI interface
 	if err := cliApp.Start(); err != nil {

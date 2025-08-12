@@ -32,9 +32,9 @@ func (c *ChatGPT) SendMessage(message string) (string, error) {
 	countScript := fmt.Sprintf(`document.querySelectorAll('%s').length`, AssistantMessage)
 	if err := chromedp.Run(c.ctx, chromedp.Evaluate(countScript, &initialMessageCount)); err != nil {
 		initialMessageCount = 0
-		log.Println("   - No initial assistant messages found, setting count to 0.")
+		//log.Println("   - No initial assistant messages found, setting count to 0.")
 	} else {
-		log.Printf("   - Initial assistant message count: %d", initialMessageCount)
+		//log.Printf("   - Initial assistant message count: %d", initialMessageCount)
 	}
 
 	// 2. Send the message.
@@ -159,14 +159,13 @@ func (c *ChatGPT) OpenChat(chatID string) error {
 
 // WaitForPageLoad waits for ChatGPT to be ready
 func (c *ChatGPT) WaitForPageLoad() error {
-	log.Println("⏳ Waiting for page to load...")
+	// Wait for page to load silently for clean UI
 	err := chromedp.Run(c.ctx,
 		chromedp.WaitVisible(InputElement, chromedp.ByQuery),
 	)
 	if err != nil {
 		return fmt.Errorf("ChatGPT page did not load correctly: %v", err)
 	}
-	log.Println("✅ Page loaded successfully.")
 	return err
 }
 

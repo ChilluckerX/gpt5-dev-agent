@@ -52,7 +52,7 @@ func (cli *CLI) Start() error {
 
 		// Send message to ChatGPT with spinner
 		spinner := ui.NewSpinner()
-		spinner.Start("Sending message and waiting for response...")
+		spinner.Start("")
 
 		response, err := cli.chatgpt.SendMessage(input)
 		spinner.Stop()
@@ -228,22 +228,22 @@ func (cli *CLI) printResponse(response string) {
 
 	// Process response with code highlighting
 	responseLines := ui.ProcessResponseWithCodeHighlight(response)
-	
+
 	for _, responseLine := range responseLines {
 		// Print border immediately
 		fmt.Print("\033[92m│   \033[0m")
-		
+
 		// Apply code highlighting if this is a code line
 		if responseLine.IsCode {
 			// Navy blue background with white text for code
 			fmt.Print(ui.NavyBlue + ui.CodeText)
 			ui.TypeText(responseLine.Text, 20*time.Millisecond) // Slightly faster for code
-			fmt.Print("\033[0m") // Reset colors
+			fmt.Print("\033[0m")                                // Reset colors
 		} else {
 			// Normal text with typing effect
 			ui.TypeText(responseLine.Text, 30*time.Millisecond)
 		}
-		
+
 		// Calculate padding to fill the line
 		padding := boxWidth - len(responseLine.Text) - 5 // 5 = "│   " + "│"
 		if padding > 0 {

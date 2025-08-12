@@ -32,7 +32,7 @@ func LoadCookiesAction() chromedp.Action {
 	return chromedp.ActionFunc(func(ctx context.Context) error {
 		cookiesData, err := os.ReadFile(config.CookiesFile)
 		if os.IsNotExist(err) {
-			log.Println("ChatGPT cookies.json not found, skipping cookie load.")
+			// No cookies file - continue silently
 			return nil
 		} else if err != nil {
 			return err
@@ -69,7 +69,7 @@ func LoadCookiesAction() chromedp.Action {
 			cookies = append(cookies, cookieParam)
 		}
 
-		log.Printf("Loading %d ChatGPT cookies into browser...", len(cookies))
+		// Cookies loaded silently for clean UI
 		return network.SetCookies(cookies).Do(ctx)
 	})
 }
