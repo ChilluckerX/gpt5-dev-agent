@@ -1,0 +1,176 @@
+package recorder
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/chatgpt-element-recorder/pkg/chatgpt"
+	"github.com/chromedp/chromedp"
+)
+
+// Recorder manages the element recording process.
+type Recorder struct {
+	ctx     context.Context
+	scanner *bufio.Scanner
+}
+
+// NewRecorder creates a new Recorder instance.
+func NewRecorder(ctx context.Context) *Recorder {
+	return &Recorder{
+		ctx:     ctx,
+		scanner: bufio.NewScanner(os.Stdin),
+	}
+}
+
+// Start begins the interactive selector recording session.
+func (r *Recorder) Start() error {
+	fmt.Println("--- Starting Element Recorder Mode ---")
+	fmt.Println("I will guide you to capture the necessary CSS selectors.")
+	fmt.Println("Please follow the instructions carefully.")
+	fmt.Println("--------------------------------------")
+
+	selectors := chatgpt.Selectors{}
+	var err error
+
+	// Capture selectors one by one
+	selectors.InputElement, err = r.captureSelectorOnClick("1. Input Text Area", "Please CLICK ONCE on the main text input area where you type your message.")
+	if err != nil {
+		return err
+	}
+
+	selectors.SubmitButton, err = r.captureSelectorOnClick("2. Send Button", "Now, please CLICK ONCE on the 'Send' button (the paper plane icon) BEFORE you send a message.")
+	if err != nil {
+		return err
+	}
+
+	// NEW STEP: Capture the stop button, which is the most reliable indicator.
+	selectors.StopButton, err = r.captureSelectorOnClick("3. Stop Button", "This is the most important step. Send a long message to ChatGPT. While it is responding, the send button will turn into a square 'Stop' button. CLICK ONCE on that 'Stop' button.")
+	if err != nil {
+		return err
+	}
+
+	selectors.LastResponse, err = r.captureSelectorOnClick("4. Final Response Area", "After a message is completely finished, CLICK ONCE on the final text content of the response.")
+	if err != nil {
+		return err
+	}
+
+	selectors.NewChatButton, err = r.captureSelectorOnClick("5. New Chat Button", "CLICK ONCE on the 'New Chat' button on the sidebar.")
+	if err != nil {
+		return err
+	}
+
+	selectors.HistoryLink, err = r.captureSelectorOnClick("6. History Link", "CLICK ONCE on any of your past conversations in the history sidebar.")
+	if err != nil {
+		return err
+	}
+
+	// Save selectors to config.json
+	return r.saveSelectors(selectors)
+}
+
+// captureSelectorOnClick guides the user to click an element and captures its selector.
+func (r *Recorder) captureSelectorOnClick(step, instruction string) (string, error) {
+	fmt.Printf("\n--- Step %s ---\n", step)
+	fmt.Println(instruction)
+
+	var selector string
+	// A more robust listener that manually cleans itself up.
+	listenScript := `
+        (function() {
+            if (window.captureClickListener) {
+                document.body.removeEventListener('click', window.captureClickListener, { capture: true });
+            }
+            window.__capturedSelector = null;
+            window.captureClickListener = (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                let el = event.target;
+                let foundSelector = '';
+                for (let i = 0; i < 5; i++) {
+                    if (!el) break;
+                    const testId = el.getAttribute('data-testid');
+                    if (testId) {
+                        foundSelector = el.tagName.toLowerCase() + '[data-testid="' + testId + '"]';
+                        break;
+                    }
+                    if (el.id && !el.id.startsWith('radix-')) {
+                        foundSelector = '#' + el.id;
+                        break;
+                    }
+                    el = el.parentElement;
+                }
+                if (!foundSelector) {
+                    el = event.target;
+                    let fallbackSelector = el.tagName.toLowerCase();
+                    const classes = Array.from(el.classList)
+                                         .filter(c => !c.includes(':') && !c.includes('(') && !c.includes('['))
+                                         .join('.');
+                    if (classes) {
+                        fallbackSelector += '.' + classes;
+                    }
+                    foundSelector = fallbackSelector;
+                }
+                window.__capturedSelector = foundSelector;
+                document.body.removeEventListener('click', window.captureClickListener, { capture: true });
+            };
+            document.body.addEventListener('click', window.captureClickListener, { capture: true });
+        })();
+    `
+
+	pollScript := `window.__capturedSelector != null`
+	retrieveScript := `window.__capturedSelector`
+
+	if err := chromedp.Run(r.ctx, chromedp.Evaluate(listenScript, nil)); err != nil {
+		return "", fmt.Errorf("could not inject click listener: %w", err)
+	}
+
+	if err := chromedp.Run(r.ctx, chromedp.Poll(pollScript, nil, chromedp.WithPollingTimeout(60*time.Second))); err != nil {
+		return "", fmt.Errorf("timed out waiting for you to click on the element for step %s", step)
+	}
+
+	if err := chromedp.Run(r.ctx, chromedp.Evaluate(retrieveScript, &selector)); err != nil {
+		return "", fmt.Errorf("could not retrieve captured selector: %w", err)
+	}
+
+	if selector == "" || selector == "body" || selector == "html" {
+		log.Printf("❌ Could not get a specific selector for %s. Found '%s'. Please try again.", step, selector)
+		return r.captureSelectorOnClick(step, instruction)
+	}
+
+	log.Printf("✅ Captured selector: %s", selector)
+	fmt.Print("Is this correct? (y/n): ")
+
+	r.scanner.Scan()
+	input := strings.TrimSpace(strings.ToLower(r.scanner.Text()))
+
+	if input == "y" {
+		log.Println("👍 Confirmed!")
+		return selector, nil
+	}
+
+	log.Println("🔄 Retrying step...")
+	return r.captureSelectorOnClick(step, instruction)
+}
+
+// saveSelectors saves the captured selectors to config.json
+func (r *Recorder) saveSelectors(selectors chatgpt.Selectors) error {
+	data, err := json.MarshalIndent(selectors, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal selectors to JSON: %w", err)
+	}
+
+	err = os.WriteFile("config.json", data, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write config.json: %w", err)
+	}
+
+	log.Println("\n🎉 Successfully saved all selectors to config.json!")
+	log.Println("You can now run the application in normal mode.")
+	return nil
+}

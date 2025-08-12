@@ -1,0 +1,1233 @@
+package chatgpt
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/chromedp/chromedp"
+)
+
+// ChatGPT represents a ChatGPT session
+type ChatGPT struct {
+	Ctx    context.Context // Exported for CLI access
+	cancel context.CancelFunc
+}
+
+// Selectors - SIMPLE and DIRECT based on actual HTML
+const (
+	// SIMPLE selectors like Python version - RELIABLE!
+	// Note: The visible input is a contenteditable div#prompt-textarea. A hidden fallback
+	// textarea[name='prompt-textarea'] may exist but shouldn't be typed into.
+	InputElement     = `#prompt-textarea` // contenteditable chat composer
+	HiddenTextarea   = `textarea[name='prompt-textarea']` // hidden fallback, avoid typing here
+	SubmitButton     = `button[data-testid='send-button']` // send
+	ResponseSelector = `div[data-message-author-role='assistant']` // ✅ SAME AS PYTHON!
+	StopButton      = `button[data-testid='stop-button']` // ✅ SAME AS PYTHON!
+    
+	// Copy button detection
+	CopySVG = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24" class="icon-md-heavy"><path fill="currentColor" fill-rule="evenodd" d="M7 5a3 3 0 0 1 3-3h9a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3h-2v2a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3v-9a3 3 0 0 1 3-3h2zm2 2h5a3 3 0 0 1 3 3v5h2a1 1 0 0 0 1-1V5a1 1 0 0 0-1-1h-9a1 1 0 0 0-1 1zM5 9a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-9a1 1 0 0 0-1-1z" clip-rule="evenodd"></path></svg>`
+    
+	// Legacy fallbacks
+	NewChatButton = "a[href='/']"
+	HistorySection = "#history"
+    
+	// XPath alternatives (legacy)
+	InputXPath    = `//*[@id="prompt-textarea"]`
+	SubmitXPath   = `//button[@data-testid="send-button"]`
+	ResponseXPath = `//div[@data-message-author-role="assistant"]`
+	StopXPath     = `//button[@data-testid="stop-button"]`
+	NewChatXPath  = `//a[@href="/"]`
+)
+
+// NewChatGPT creates a new ChatGPT session
+func NewChatGPT(ctx context.Context) *ChatGPT {
+	return &ChatGPT{
+		Ctx: ctx,
+	}
+}
+
+// SendMessageWithStreaming sends a message and streams the response in real-time
+func (c *ChatGPT) SendMessageWithStreaming(message string, onUpdate func(string, bool)) (string, error) {
+	log.Printf("📤 Sending message: %s", message)
+
+	// Send message to ChatGPT using PYTHON-STYLE approach with DEBUG
+	log.Println("🔍 DEBUG: Starting message sending process...")
+    
+	// Ensure input is present and focus the contenteditable div
+	var inputExists bool
+	err := chromedp.Run(c.Ctx, chromedp.Evaluate(`
+		(function() {
+			const ce = document.querySelector('#prompt-textarea');
+			const hidden = document.querySelector('textarea[name="prompt-textarea"]');
+			return !!(ce || hidden);
+		})();
+	`, &inputExists))
+	if err != nil || !inputExists {
+		return "", fmt.Errorf("chat input not found: %v", err)
+	}
+
+	// Focus the contenteditable and set caret at end
+	_ = chromedp.Run(c.Ctx,
+		chromedp.WaitVisible(InputElement, chromedp.ByQuery),
+		chromedp.Click(InputElement, chromedp.ByQuery),
+		chromedp.Sleep(200*time.Millisecond),
+	)
+
+	// Clear existing text and insert our message via execCommand for contenteditable
+	log.Printf("🖊️ Typing message: '%s'", message)
+	err = chromedp.Run(c.Ctx, chromedp.Evaluate(fmt.Sprintf(`
+		(function(msg){
+			const ce = document.querySelector('#prompt-textarea');
+			if (!ce) return false;
+			// Clear
+			ce.focus();
+			const sel = window.getSelection();
+			if (sel && ce.firstChild) {
+				sel.removeAllRanges();
+				const range = document.createRange();
+				range.selectNodeContents(ce);
+				range.collapse(false);
+				sel.addRange(range);
+			}
+			// Replace content
+			ce.innerHTML = '';
+			document.execCommand('insertText', false, msg);
+			// Fire input event to enable send button
+			ce.dispatchEvent(new InputEvent('input', {bubbles:true}));
+			return true;
+		})(%q);
+	`, message), nil))
+	if err != nil {
+		return "", fmt.Errorf("failed to type into contenteditable: %v", err)
+	}
+
+	// Submit: try click send button, else send Enter
+	clickErr := chromedp.Run(c.Ctx,
+		chromedp.WaitVisible(SubmitButton, chromedp.ByQuery),
+		chromedp.Click(SubmitButton, chromedp.ByQuery),
+	)
+	if clickErr != nil {
+		log.Printf("⚠️ Click submit failed, trying Enter key: %v", clickErr)
+		_ = chromedp.Run(c.Ctx, chromedp.SendKeys(InputElement, "\n", chromedp.ByQuery))
+	}
+
+	log.Println("✅ Message submitted, waiting for response...")
+
+	// Debug submit button
+	log.Println("🔍 DEBUG: Checking submit button...")
+	var submitInfo map[string]interface{}
+	err = chromedp.Run(c.Ctx, chromedp.Evaluate(`
+		(function() {
+			const submit1 = document.querySelector('button[data-testid="send-button"]');
+			const submit2 = document.querySelector('#composer-submit-button');
+			const submit3 = document.querySelector('button[type="submit"]');
+			const submit4 = document.querySelector('[data-testid="send-button"]');
+            
+			console.log('Submit1 (Python-style):', submit1);
+			console.log('Submit2 (Legacy):', submit2);
+			console.log('Submit3 (Type submit):', submit3);
+			console.log('Submit4 (Data testid):', submit4);
+            
+			const button = submit1 || submit2 || submit3 || submit4;
+			if (button) {
+				return {
+					exists: true,
+					visible: button.offsetParent !== null,
+					enabled: !button.disabled,
+					tagName: button.tagName,
+					className: button.className,
+					testId: button.getAttribute('data-testid'),
+					type: button.type,
+					text: button.textContent || button.innerText
+				};
+			}
+			return {exists: false};
+		})();
+	`, &submitInfo))
+    
+	log.Printf("🔍 DEBUG: Submit button info: %+v", submitInfo)
+
+	// Click submit button using Python-style
+	log.Println("🚀 Trying to click send button...")
+	err = chromedp.Run(c.Ctx,
+		chromedp.WaitVisible(SubmitButton, chromedp.ByQuery),
+		chromedp.Click(SubmitButton, chromedp.ByQuery),
+	)
+	if err != nil {
+		log.Printf("🔍 DEBUG: Python-style submit failed: %v", err)
+		// Try multiple fallback selectors
+		selectors := []string{
+			"#composer-submit-button",
+			"button[type='submit']",
+			"[data-testid='send-button']",
+			"button:has(svg)",
+		}
+        
+		for _, selector := range selectors {
+			log.Printf("🔍 DEBUG: Trying selector: %s", selector)
+			err = chromedp.Run(c.Ctx,
+				chromedp.Click(selector, chromedp.ByQuery),
+			)
+			if err == nil {
+				log.Printf("✅ Success with selector: %s", selector)
+				break
+			}
+			log.Printf("❌ Failed with selector: %s - %v", selector, err)
+		}
+        
+		if err != nil {
+			return "", fmt.Errorf("failed to click send button with all selectors: %v", err)
+		}
+	}
+    
+	log.Println("✅ Send button clicked successfully")
+
+	log.Println("⏳ Waiting for response...")
+
+	// Wait for Stop Button appear/disappear to mark generation window
+	log.Println("🔄 Waiting for stop button to appear...")
+    
+	// Wait for stop button to appear (ChatGPT is generating)
+	err = chromedp.Run(c.Ctx, chromedp.WaitVisible(StopButton, chromedp.ByQuery))
+	if err != nil {
+		// Fallback to XPath
+		err = chromedp.Run(c.Ctx, chromedp.WaitVisible(StopXPath, chromedp.BySearch))
+		if err != nil {
+			log.Printf("⚠️ Stop button not detected, continuing anyway: %v", err)
+		}
+	} else {
+		log.Println("✅ Stop button appeared - ChatGPT is generating...")
+	}
+    
+	// Wait for stop button to disappear (ChatGPT finished)
+	log.Println("⏳ Waiting for stop button to disappear...")
+	err = chromedp.Run(c.Ctx, chromedp.WaitNotPresent(StopButton, chromedp.ByQuery))
+	if err != nil {
+		// Fallback to XPath
+		err = chromedp.Run(c.Ctx, chromedp.WaitNotPresent(StopXPath, chromedp.BySearch))
+		if err != nil {
+			log.Printf("⚠️ Stop button disappear not detected: %v", err)
+		}
+	} else {
+		log.Println("✅ Stop button disappeared - ChatGPT finished!")
+	}
+    
+	// Wait a bit more like Python version
+	time.Sleep(2 * time.Second)
+    
+	// SIMPLE RESPONSE EXTRACTION like Python version
+	var response string
+    
+	// PYTHON-STYLE: Simple response extraction using reliable selector
+	log.Println("📥 Extracting response using simple selector...")
+    
+	// Get all assistant responses and take the latest one (like Python)
+	var allResponses []string
+	err = chromedp.Run(c.Ctx, chromedp.Evaluate(`
+		(function() {
+			const responses = document.querySelectorAll('div[data-message-author-role="assistant"]');
+			const results = [];
+			for (let i = 0; i < responses.length; i++) {
+				const text = responses[i].textContent || responses[i].innerText || '';
+				if (text.trim()) {
+					results.push(text.trim());
+				}
+			}
+			return results;
+		})();
+	`, &allResponses))
+    
+	if err == nil && len(allResponses) > 0 {
+		// Get the latest response (like Python version)
+		response = allResponses[len(allResponses)-1]
+		log.Printf("✅ Got response using simple approach: %d chars", len(response))
+		// If response is just the screen-reader prefix or too short, try a deeper extraction
+		if strings.TrimSpace(response) == "ChatGPT said:" || len(strings.TrimSpace(response)) < 4 {
+			log.Println("ℹ️ Response was prefix-only, trying markdown extraction...")
+			var deep string
+			_ = chromedp.Run(c.Ctx, chromedp.Evaluate(`
+				(function(){
+					const containers = Array.from(document.querySelectorAll('div[data-message-author-role="assistant"]'));
+					for (let i = containers.length - 1; i >= 0; i--) {
+						const c = containers[i];
+						const md = c.querySelector('div.markdown, div[class*="prose"], [data-message-content]');
+						if (md) {
+							const t = (md.textContent || md.innerText || '').trim();
+							if (t) return t;
+						}
+						const t2 = (c.textContent || c.innerText || '').trim();
+						if (t2) return t2;
+					}
+					return '';
+				})();
+			`, &deep))
+			if strings.TrimSpace(deep) != "" {
+				response = deep
+			}
+		}
+	} else {
+		log.Printf("⚠️ Simple approach failed: %v", err)
+	}
+    
+	// If Python approach got response, clean and return it
+	if response != "" {
+		// Clean the response like Python version
+		response = strings.TrimSpace(response)
+        
+		// Remove common prefixes
+		if strings.HasPrefix(response, "ChatGPT said:") {
+			response = strings.TrimSpace(strings.TrimPrefix(response, "ChatGPT said:"))
+		}
+        
+		// Remove artifacts
+		response = strings.ReplaceAll(response, "Copy code", "")
+		response = strings.ReplaceAll(response, "Always show details", "")
+		response = strings.ReplaceAll(response, "Show more", "")
+		response = strings.ReplaceAll(response, "Show less", "")
+        
+		// Final cleanup
+		response = strings.TrimSpace(response)
+        
+		log.Printf("✅ Python-style extraction successful: %d chars", len(response))
+        
+		// Call onUpdate if provided
+		if onUpdate != nil {
+			onUpdate(response, true) // Mark as complete
+		}
+        
+		return response, nil
+	}
+    
+	// Fallback to complex approach if Python style failed
+	log.Println("⚠️ Falling back to complex extraction...")
+    
+	// Setup instant MutationObserver
+	observerScript := `
+		(function() {
+			let lastResponse = '';
+			let stableCount = 0;
+            
+			function getCurrentResponse() {
+				// More robust extraction targeting actual ChatGPT response structure
+				const articles = document.querySelectorAll('article');
+				for (let i = articles.length - 1; i >= 0; i--) {
+					const article = articles[i];
+					if (article.getAttribute('data-turn') === 'assistant' || 
+						article.textContent.includes('ChatGPT said:') ||
+						article.querySelector('[data-message-author-role="assistant"]')) {
+                        
+						let text = '';
+                        
+						// Strategy 1: Look for code blocks first (for programming responses)
+						const codeBlocks = article.querySelectorAll('pre code, code pre, .hljs');
+						if (codeBlocks.length > 0) {
+							let codeText = '';
+							codeBlocks.forEach(block => {
+								// Get text from syntax-highlighted code
+								const spans = block.querySelectorAll('span');
+								if (spans.length > 0) {
+									spans.forEach(span => {
+										codeText += span.textContent || span.innerText || '';
+									});
+								} else {
+									codeText += block.textContent || block.innerText || '';
+								}
+								codeText += '\n';
+							});
+							if (codeText.trim()) {
+								text = codeText.trim();
+							}
+						}
+                        
+						// Strategy 2: Try markdown/prose content
+						if (!text) {
+							const contentDivs = article.querySelectorAll('div[class*="markdown"], div[class*="prose"], div[data-message-content]');
+							for (const div of contentDivs) {
+								const divText = div.textContent || div.innerText || '';
+								if (divText.length > text.length) {
+									text = divText;
+								}
+							}
+						}
+                        
+						// Strategy 3: Get all text but filter out UI elements
+						if (!text) {
+							text = article.textContent || article.innerText || '';
+							// Remove common UI text that gets mixed in
+							text = text.replace(/Copy code/g, '');
+							text = text.replace(/Always show details/g, '');
+							text = text.replace(/Show more/g, '');
+							text = text.replace(/Show less/g, '');
+						}
+                        
+						// Clean but preserve structure
+						if (text.includes('{') || text.includes('def ') || text.includes('#include') || text.includes('import ')) {
+							// Preserve code/JSON formatting
+							text = text.replace(/\n\s*\n\s*\n/g, '\n\n').trim();
+						} else {
+							// Regular text - normalize spaces
+							text = text.replace(/\s+/g, ' ').trim();
+						}
+                        
+						return text;
+					}
+				}
+				return '';
+			}
+            
+			function processResponse() {
+				const currentResponse = getCurrentResponse();
+                
+				// Skip thinking/loading messages
+				if (!currentResponse || 
+					currentResponse.includes('Thinking longer for a better answer') ||
+					currentResponse.includes('Get a quick answer') ||
+					currentResponse.includes('ChatGPT is thinking') ||
+					currentResponse.length < 20) {
+					return;
+				}
+                
+				// Clean response more thoroughly
+				let cleanResponse = currentResponse.trim();
+                
+				// Remove common prefixes and artifacts
+				if (cleanResponse.startsWith('ChatGPT said:')) {
+					cleanResponse = cleanResponse.replace('ChatGPT said:', '').trim();
+				}
+				if (cleanResponse.startsWith('jsonCopyEdit')) {
+					cleanResponse = cleanResponse.replace(/^jsonCopyEdit\s*/, '').trim();
+				}
+				if (cleanResponse.startsWith('pythonCopyEdit')) {
+					cleanResponse = cleanResponse.replace(/^pythonCopyEdit\s*/, '').trim();
+				}
+				if (cleanResponse.startsWith('pythonAlways show details')) {
+					cleanResponse = cleanResponse.replace(/^pythonAlways show details\s*/, '').trim();
+				}
+				if (cleanResponse.startsWith('Copy')) {
+					cleanResponse = cleanResponse.replace(/^Copy\s*/, '').trim();
+				}
+				if (cleanResponse.startsWith('Generating')) {
+					cleanResponse = cleanResponse.replace(/^Generating[^}]*}?\s*/, '').trim();
+				}
+				if (cleanResponse startsWith('Get a quick answer')) {
+					return; // Skip this completely
+				}
+				if (cleanResponse.startsWith('Analyzed')) {
+					cleanResponse = cleanResponse.replace(/^Analyzed\s*/, '').trim();
+				}
+                
+				// Process any meaningful content (lower threshold so short texts like 'test' pass)
+				if (cleanResponse && cleanResponse.length > 3 && cleanResponse !== lastResponse) {
+					// NEW TEXT DETECTED - INSTANT UPDATE!
+					window.chatgptStream.updates.push({
+						text: cleanResponse,
+						complete: false,
+						timestamp: Date.now()
+					});
+					lastResponse = cleanResponse;
+					stableCount = 0;
+				} else if (cleanResponse && cleanResponse === lastResponse && cleanResponse.length > 3) {
+					// Text stable - check if complete (INCREASED for long responses)
+					stableCount++;
+					// For very long responses (ChatGPT-5 can give up to 6000 words!), wait much longer
+					let requiredStableCount = 3; // default - ok for short responses
+					if (cleanResponse.length > 10000) requiredStableCount = 15; // Very long responses
+					else if (cleanResponse.length > 5000) requiredStableCount = 12;
+					else if (cleanResponse.length > 2000) requiredStableCount = 10;
+					else if (cleanResponse.length > 1000) requiredStableCount = 8;
+					else if (cleanResponse.length > 500) requiredStableCount = 6;
+					else if (cleanResponse.length > 200) requiredStableCount = 4;
+                    
+					if (stableCount >= requiredStableCount) {
+						window.chatgptStream.updates.push({
+							text: cleanResponse,
+							complete: true,
+							timestamp: Date.now()
+						});
+						window.chatgptStream.isComplete = true;
+						if (window.chatgptStream.observer) {
+							window.chatgptStream.observer.disconnect();
+						}
+					}
+				}
+			}
+            
+			// Setup MutationObserver for INSTANT detection
+			const observer = new MutationObserver(() => {
+				processResponse(); // Immediate processing on ANY DOM change
+			});
+            
+			window.chatgptStream.observer = observer;
+            
+			// Observe with maximum sensitivity
+			const threadContainer = document.querySelector('#thread') || document.body;
+			observer.observe(threadContainer, {
+				childList: true,
+				subtree: true,
+				characterData: true,
+				attributes: true,
+				attributeOldValue: true,
+				characterDataOldValue: true
+			});
+            
+			// Ultra-fast fallback polling (100ms)
+			const interval = setInterval(processResponse, 100);
+            
+			// Cleanup after timeout
+			setTimeout(() => {
+				observer.disconnect();
+				clearInterval(interval);
+				window.chatgptStream.isComplete = true;
+			}, 60000);
+            
+			// Initial check
+			processResponse();
+		})();
+	`
+    
+	// Execute observer setup
+	err = chromedp.Run(c.Ctx, chromedp.Evaluate(observerScript, nil))
+	if err != nil {
+		return "", fmt.Errorf("failed to setup observer: %v", err)
+	}
+    
+	// Ultra-fast polling for updates (50ms for maximum responsiveness)
+	maxWait := 60 * 20 // 60 seconds with 50ms intervals
+	for i := 0; i < maxWait; i++ {
+		time.Sleep(50 * time.Millisecond)
+        
+		// Check for new updates
+		var streamData map[string]interface{}
+		err = chromedp.Run(c.Ctx, chromedp.Evaluate(`window.chatgptStream`, &streamData))
+		if err != nil {
+			continue
+		}
+        
+		if updates, ok := streamData["updates"].([]interface{}); ok && len(updates) > 0 {
+			// Process all pending updates
+			for _, update := range updates {
+				if updateMap, ok := update.(map[string]interface{}); ok {
+					if text, ok := updateMap["text"].(string); ok {
+						if complete, ok := updateMap["complete"].(bool); ok {
+							if onUpdate != nil {
+								onUpdate(text, complete)
+							}
+							response = text
+							if complete {
+								// Clear updates and return
+								chromedp.Run(c.Ctx, chromedp.Evaluate(`window.chatgptStream.updates = []`, nil))
+								goto cleanup
+							}
+						}
+					}
+				}
+			}
+			// Clear processed updates
+			chromedp.Run(c.Ctx, chromedp.Evaluate(`window.chatgptStream.updates = []`, nil))
+		}
+        
+		// Check if complete
+		if isComplete, ok := streamData["isComplete"].(bool); ok && isComplete {
+			break
+		}
+	}
+    
+	cleanup:
+	// Cleanup observer
+	chromedp.Run(c.Ctx, chromedp.Evaluate(`
+		if (window.chatgptStream && window.chatgptStream.observer) {
+			window.chatgptStream.observer.disconnect();
+		}
+		delete window.chatgptStream;
+	`, nil))
+
+	// Extract the final response with comprehensive cleaning
+	if response == "" {
+		err = chromedp.Run(c.Ctx, chromedp.Evaluate(`
+			(function() {
+				const articles = document.querySelectorAll('article');
+				for (let i = articles.length - 1; i >= 0; i--) {
+					const article = articles[i];
+					if (article.getAttribute('data-turn') === 'assistant' || 
+						article.textContent.includes('ChatGPT said:')) {
+                        
+						// Multiple extraction strategies
+						let text = '';
+                        
+						// Strategy 1: Try markdown content first
+						const markdownDiv = article.querySelector('div[class*="markdown"]');
+						if (markdownDiv) {
+							text = markdownDiv.textContent || markdownDiv.innerText || '';
+						}
+                        
+						// Strategy 2: Try prose content
+						if (!text) {
+							const proseDiv = article.querySelector('div[class*="prose"]');
+							if (proseDiv) {
+								text = proseDiv.textContent || proseDiv.innerText || '';
+							}
+						}
+                        
+						// Strategy 3: Full article text
+						if (!text) {
+							text = article.textContent || article.innerText || '';
+						}
+                        
+						// Clean the text thoroughly
+						text = text.trim();
+                        
+						// Remove unwanted prefixes
+						text = text.replace(/^ChatGPT said:\s*/, '');
+						text = text.replace(/^jsonCopyEdit\s*/, '');
+						text = text.replace(/^Generating[^}]*}?\s*/, '');
+						text = text.replace(/^Get a quick answer\s*/, '');
+						text = text.replace(/^Thought for \d+[ms]\s*/, '');
+                        
+						// Preserve JSON/code structure or normalize spaces
+						if (text.includes('{') || text.includes('def ') || text.includes('import ') || text.includes('class ')) {
+							// Preserve code formatting
+							text = text.replace(/\n\s*\n\s*\n/g, '\n\n').trim();
+						} else {
+							// Regular text - normalize spaces
+							text = text.replace(/\s+/g, ' ').trim();
+						}
+                        
+						return text;
+					}
+				}
+				return '';
+			})();
+		`, &response))
+	}
+
+	if err != nil || strings.TrimSpace(response) == "" {
+		// Fallback to simple selector
+		// Prefer last assistant container markdown
+		var deep string
+		deepErr := chromedp.Run(c.Ctx, chromedp.Evaluate(`
+			(function(){
+				const containers = Array.from(document.querySelectorAll('div[data-message-author-role="assistant"]'));
+				for (let i = containers.length - 1; i >= 0; i--) {
+					const c = containers[i];
+					const md = c.querySelector('div.markdown, div[class*="prose"], [data-message-content]');
+					if (md) {
+						const t = (md.textContent || md.innerText || '').trim();
+						if (t) return t;
+					}
+					const t2 = (c.textContent || c.innerText || '').trim();
+					if (t2) return t2;
+				}
+				return '';
+			})();
+		`, &deep))
+		if deepErr == nil && strings.TrimSpace(deep) != "" {
+			response = deep
+		} else {
+			err = chromedp.Run(c.Ctx,
+				chromedp.Text(`article:last-child`, &response, chromedp.ByQuery),
+			)
+			if err != nil {
+				return "", fmt.Errorf("failed to get response: %v", err)
+			}
+		}
+	}
+
+	// Clean up the response
+	response = strings.TrimSpace(response)
+
+	// Remove "ChatGPT said:" prefix if present
+	if strings.HasPrefix(response, "ChatGPT said:") {
+		response = strings.TrimSpace(strings.TrimPrefix(response, "ChatGPT said:"))
+	}
+
+	// Remove "Thought for Xs" prefix if present
+	thoughtRegex := regexp.MustCompile(`^Thought for \d+s\s*`)
+	response = thoughtRegex.ReplaceAllString(response, "")
+
+	// Clean up extra whitespace but preserve structure for code/JSON
+	// Don't compress whitespace if it looks like code or JSON
+	if !strings.Contains(response, "{") && !strings.Contains(response, "```") {
+		response = regexp.MustCompile(`\s+`).ReplaceAllString(response, " ")
+	}
+	response = strings.TrimSpace(response)
+
+	if response == "" {
+		return "", fmt.Errorf("received empty response")
+	}
+
+	return response, nil
+}
+
+// SendMessage - backward compatibility wrapper
+func (c *ChatGPT) SendMessage(message string) (string, error) {
+	return c.SendMessageWithStreaming(message, nil)
+}
+
+// StartNewChat starts a new chat session
+func (c *ChatGPT) StartNewChat() error {
+	log.Println("🆕 Starting new chat...")
+
+	err := chromedp.Run(c.Ctx,
+		chromedp.Click(NewChatXPath, chromedp.BySearch),
+		chromedp.Sleep(2*time.Second), // Wait for new chat to load
+	)
+	if err != nil {
+		return fmt.Errorf("failed to start new chat: %v", err)
+	}
+
+	log.Println("✅ New chat started")
+	return nil
+}
+
+// GetChatHistory gets the list of chat history
+func (c *ChatGPT) GetChatHistory() ([]ChatHistoryItem, error) {
+	log.Println("📜 Getting chat history...")
+
+	var historyItems []ChatHistoryItem
+
+	// Get all history links
+	var nodes []map[string]string
+	err := chromedp.Run(c.Ctx,
+		chromedp.AttributesAll(`#history a[href^="/c/"]`, &nodes, chromedp.ByQueryAll),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get history nodes: %v", err)
+	}
+
+	// Extract information from each history item
+	for i, attrs := range nodes {
+		if i >= 10 { // Limit to 10 recent chats
+			break
+		}
+
+		href := attrs["href"]
+		var title string
+		err = chromedp.Run(c.Ctx,
+			chromedp.Text(fmt.Sprintf(`#history a[href="%s"]`, href), &title, chromedp.ByQuery),
+		)
+		if err != nil {
+			log.Printf("Failed to get details for history item %d: %v", i, err)
+			continue
+		}
+
+		historyItems = append(historyItems, ChatHistoryItem{
+			Title: strings.TrimSpace(title),
+			URL:   "https://chatgpt.com" + href,
+			ID:    extractChatID(href),
+		})
+	}
+
+	log.Printf("📜 Found %d chat history items", len(historyItems))
+	return historyItems, nil
+}
+
+// OpenChat opens a specific chat by ID
+func (c *ChatGPT) OpenChat(chatID string) error {
+	log.Printf("📂 Opening chat: %s", chatID)
+
+	url := fmt.Sprintf("https://chatgpt.com/c/%s", chatID)
+	err := chromedp.Run(c.Ctx,
+		chromedp.Navigate(url),
+		chromedp.Sleep(3*time.Second), // Wait for chat to load
+	)
+	if err != nil {
+		return fmt.Errorf("failed to open chat: %v", err)
+	}
+
+	log.Println("✅ Chat opened")
+	return nil
+}
+
+// ChatHistoryItem represents a chat history item
+type ChatHistoryItem struct {
+	Title string
+	URL   string
+	ID    string
+}
+
+// Helper function to extract chat ID from href
+func extractChatID(href string) string {
+	parts := strings.Split(href, "/")
+	if len(parts) >= 3 && parts[1] == "c" {
+		return parts[2]
+	}
+	return ""
+}
+
+// WaitForPageLoad waits for ChatGPT to be ready
+func (c *ChatGPT) WaitForPageLoad() error {
+	// Just do a simple check - don't be too strict
+	err := chromedp.Run(c.Ctx,
+		chromedp.Sleep(2*time.Second), // Simple wait
+	)
+	return err
+}
+
+	// Fallback to complex approach if Python style failed
+	log.Println("⚠️ Falling back to complex extraction...")
+	
+	// Setup instant MutationObserver
+	observerScript := `
+		(function() {
+			let lastResponse = '';
+			let stableCount = 0;
+			
+			function getCurrentResponse() {
+				// More robust extraction targeting actual ChatGPT response structure
+				const articles = document.querySelectorAll('article');
+				for (let i = articles.length - 1; i >= 0; i--) {
+					const article = articles[i];
+					if (article.getAttribute('data-turn') === 'assistant' || 
+						article.textContent.includes('ChatGPT said:') ||
+						article.querySelector('[data-message-author-role="assistant"]')) {
+						
+						let text = '';
+						
+						// Strategy 1: Look for code blocks first (for programming responses)
+						const codeBlocks = article.querySelectorAll('pre code, code pre, .hljs');
+						if (codeBlocks.length > 0) {
+							let codeText = '';
+							codeBlocks.forEach(block => {
+								// Get text from syntax-highlighted code
+								const spans = block.querySelectorAll('span');
+								if (spans.length > 0) {
+									spans.forEach(span => {
+										codeText += span.textContent || span.innerText || '';
+									});
+								} else {
+									codeText += block.textContent || block.innerText || '';
+								}
+								codeText += '\n';
+							});
+							if (codeText.trim()) {
+								text = codeText.trim();
+							}
+						}
+						
+						// Strategy 2: Try markdown/prose content
+						if (!text) {
+							const contentDivs = article.querySelectorAll('div[class*="markdown"], div[class*="prose"], div[data-message-content]');
+							for (const div of contentDivs) {
+								const divText = div.textContent || div.innerText || '';
+								if (divText.length > text.length) {
+									text = divText;
+								}
+							}
+						}
+						
+						// Strategy 3: Get all text but filter out UI elements
+						if (!text) {
+							text = article.textContent || article.innerText || '';
+							// Remove common UI text that gets mixed in
+							text = text.replace(/Copy code/g, '');
+							text = text.replace(/Always show details/g, '');
+							text = text.replace(/Show more/g, '');
+							text = text.replace(/Show less/g, '');
+						}
+						
+						// Clean but preserve structure
+						if (text.includes('{') || text.includes('def ') || text.includes('#include') || text.includes('import ')) {
+							// Preserve code/JSON formatting
+							text = text.replace(/\n\s*\n\s*\n/g, '\n\n').trim();
+						} else {
+							// Regular text - normalize spaces
+							text = text.replace(/\s+/g, ' ').trim();
+						}
+						
+						return text;
+					}
+				}
+				return '';
+			}
+			
+			function processResponse() {
+				const currentResponse = getCurrentResponse();
+				
+				// Skip thinking/loading messages
+				if (!currentResponse || 
+					currentResponse.includes('Thinking longer for a better answer') ||
+					currentResponse.includes('Get a quick answer') ||
+					currentResponse.includes('ChatGPT is thinking') ||
+					currentResponse.length < 20) {
+					return;
+				}
+				
+				// Clean response more thoroughly
+				let cleanResponse = currentResponse.trim();
+				
+				// Remove common prefixes and artifacts
+				if (cleanResponse.startsWith('ChatGPT said:')) {
+					cleanResponse = cleanResponse.replace('ChatGPT said:', '').trim();
+				}
+				if (cleanResponse.startsWith('jsonCopyEdit')) {
+					cleanResponse = cleanResponse.replace(/^jsonCopyEdit\s*/, '').trim();
+				}
+				if (cleanResponse.startsWith('pythonCopyEdit')) {
+					cleanResponse = cleanResponse.replace(/^pythonCopyEdit\s*/, '').trim();
+				}
+				if (cleanResponse.startsWith('pythonAlways show details')) {
+					cleanResponse = cleanResponse.replace(/^pythonAlways show details\s*/, '').trim();
+				}
+				if (cleanResponse.startsWith('Copy')) {
+					cleanResponse = cleanResponse.replace(/^Copy\s*/, '').trim();
+				}
+				if (cleanResponse.startsWith('Generating')) {
+					cleanResponse = cleanResponse.replace(/^Generating[^}]*}?\s*/, '').trim();
+				}
+				if (cleanResponse.startsWith('Get a quick answer')) {
+					return; // Skip this completely
+				}
+				if (cleanResponse.startsWith('Analyzed')) {
+					cleanResponse = cleanResponse.replace(/^Analyzed\s*/, '').trim();
+				}
+				
+				// Process any meaningful content (lower threshold so short texts like 'test' pass)
+				if (cleanResponse && cleanResponse.length > 3 && cleanResponse !== lastResponse) {
+					// NEW TEXT DETECTED - INSTANT UPDATE!
+					window.chatgptStream.updates.push({
+						text: cleanResponse,
+						complete: false,
+						timestamp: Date.now()
+					});
+					lastResponse = cleanResponse;
+					stableCount = 0;
+				} else if (cleanResponse && cleanResponse === lastResponse && cleanResponse.length > 3) {
+					// Text stable - check if complete (INCREASED for long responses)
+					stableCount++;
+					// For very long responses (ChatGPT-5 can give up to 6000 words!), wait much longer
+					let requiredStableCount = 3; // default - ok for short responses
+					if (cleanResponse.length > 10000) requiredStableCount = 15; // Very long responses
+					else if (cleanResponse.length > 5000) requiredStableCount = 12;
+					else if (cleanResponse.length > 2000) requiredStableCount = 10;
+					else if (cleanResponse.length > 1000) requiredStableCount = 8;
+					else if (cleanResponse.length > 500) requiredStableCount = 6;
+					else if (cleanResponse.length > 200) requiredStableCount = 4;
+					
+					if (stableCount >= requiredStableCount) {
+						window.chatgptStream.updates.push({
+							text: cleanResponse,
+							complete: true,
+							timestamp: Date.now()
+						});
+						window.chatgptStream.isComplete = true;
+						if (window.chatgptStream.observer) {
+							window.chatgptStream.observer.disconnect();
+						}
+					}
+				}
+			}
+			
+			// Setup MutationObserver for INSTANT detection
+			const observer = new MutationObserver(() => {
+				processResponse(); // Immediate processing on ANY DOM change
+			});
+			
+			window.chatgptStream.observer = observer;
+			
+			// Observe with maximum sensitivity
+			const threadContainer = document.querySelector('#thread') || document.body;
+			observer.observe(threadContainer, {
+				childList: true,
+				subtree: true,
+				characterData: true,
+				attributes: true,
+				attributeOldValue: true,
+				characterDataOldValue: true
+			});
+			
+			// Ultra-fast fallback polling (100ms)
+			const interval = setInterval(processResponse, 100);
+			
+			// Cleanup after timeout
+			setTimeout(() => {
+				observer.disconnect();
+				clearInterval(interval);
+				window.chatgptStream.isComplete = true;
+			}, 60000);
+			
+			// Initial check
+			processResponse();
+		})();
+	`
+	
+	// Execute observer setup
+	err = chromedp.Run(c.Ctx, chromedp.Evaluate(observerScript, nil))
+	if err != nil {
+		return "", fmt.Errorf("failed to setup observer: %v", err)
+	}
+	
+	// Ultra-fast polling for updates (50ms for maximum responsiveness)
+	maxWait := 60 * 20 // 60 seconds with 50ms intervals
+	for i := 0; i < maxWait; i++ {
+		time.Sleep(50 * time.Millisecond)
+		
+		// Check for new updates
+		var streamData map[string]interface{}
+		err = chromedp.Run(c.Ctx, chromedp.Evaluate(`window.chatgptStream`, &streamData))
+		if err != nil {
+			continue
+		}
+		
+		if updates, ok := streamData["updates"].([]interface{}); ok && len(updates) > 0 {
+			// Process all pending updates
+			for _, update := range updates {
+				if updateMap, ok := update.(map[string]interface{}); ok {
+					if text, ok := updateMap["text"].(string); ok {
+						if complete, ok := updateMap["complete"].(bool); ok {
+							if onUpdate != nil {
+								onUpdate(text, complete)
+							}
+							response = text
+							if complete {
+								// Clear updates and return
+								chromedp.Run(c.Ctx, chromedp.Evaluate(`window.chatgptStream.updates = []`, nil))
+								goto cleanup
+							}
+						}
+					}
+				}
+			}
+			// Clear processed updates
+			chromedp.Run(c.Ctx, chromedp.Evaluate(`window.chatgptStream.updates = []`, nil))
+		}
+		
+		// Check if complete
+		if isComplete, ok := streamData["isComplete"].(bool); ok && isComplete {
+			break
+		}
+	}
+	
+	cleanup:
+	// Cleanup observer
+	chromedp.Run(c.Ctx, chromedp.Evaluate(`
+		if (window.chatgptStream && window.chatgptStream.observer) {
+			window.chatgptStream.observer.disconnect();
+		}
+		delete window.chatgptStream;
+	`, nil))
+
+	// Extract the final response with comprehensive cleaning
+	if response == "" {
+		err = chromedp.Run(c.Ctx, chromedp.Evaluate(`
+			(function() {
+				const articles = document.querySelectorAll('article');
+				for (let i = articles.length - 1; i >= 0; i--) {
+					const article = articles[i];
+					if (article.getAttribute('data-turn') === 'assistant' || 
+						article.textContent.includes('ChatGPT said:')) {
+						
+						// Multiple extraction strategies
+						let text = '';
+						
+						// Strategy 1: Try markdown content first
+						const markdownDiv = article.querySelector('div[class*="markdown"]');
+						if (markdownDiv) {
+							text = markdownDiv.textContent || markdownDiv.innerText || '';
+						}
+						
+						// Strategy 2: Try prose content
+						if (!text) {
+							const proseDiv = article.querySelector('div[class*="prose"]');
+							if (proseDiv) {
+								text = proseDiv.textContent || proseDiv.innerText || '';
+							}
+						}
+						
+						// Strategy 3: Full article text
+						if (!text) {
+							text = article.textContent || article.innerText || '';
+						}
+						
+						// Clean the text thoroughly
+						text = text.trim();
+						
+						// Remove unwanted prefixes
+						text = text.replace(/^ChatGPT said:\s*/, '');
+						text = text.replace(/^jsonCopyEdit\s*/, '');
+						text = text.replace(/^Generating[^}]*}?\s*/, '');
+						text = text.replace(/^Get a quick answer\s*/, '');
+						text = text.replace(/^Thought for \d+[ms]\s*/, '');
+						
+						// Preserve JSON/code structure or normalize spaces
+						if (text.includes('{') || text.includes('def ') || text.includes('import ') || text.includes('class ')) {
+							// Preserve code formatting
+							text = text.replace(/\n\s*\n\s*\n/g, '\n\n').trim();
+						} else {
+							// Regular text - normalize spaces
+							text = text.replace(/\s+/g, ' ').trim();
+						}
+						
+						return text;
+					}
+				}
+				return '';
+			})();
+		`, &response))
+	}
+
+	if err != nil || strings.TrimSpace(response) == "" {
+		// Fallback to simple selector
+		// Prefer last assistant container markdown
+		var deep string
+		deepErr := chromedp.Run(c.Ctx, chromedp.Evaluate(`
+			(function(){
+				const containers = Array.from(document.querySelectorAll('div[data-message-author-role="assistant"]'));
+				for (let i = containers.length - 1; i >= 0; i--) {
+					const c = containers[i];
+					const md = c.querySelector('div.markdown, div[class*="prose"], [data-message-content]');
+					if (md) {
+						const t = (md.textContent || md.innerText || '').trim();
+						if (t) return t;
+					}
+					const t2 = (c.textContent || c.innerText || '').trim();
+					if (t2) return t2;
+				}
+				return '';
+			})();
+		`, &deep))
+		if deepErr == nil && strings.TrimSpace(deep) != "" {
+			response = deep
+		} else {
+			err = chromedp.Run(c.Ctx,
+				chromedp.Text(`article:last-child`, &response, chromedp.ByQuery),
+			)
+			if err != nil {
+				return "", fmt.Errorf("failed to get response: %v", err)
+			}
+		}
+	}
+
+	// Clean up the response
+	response = strings.TrimSpace(response)
+
+	// Remove "ChatGPT said:" prefix if present
+	if strings.HasPrefix(response, "ChatGPT said:") {
+		response = strings.TrimSpace(strings.TrimPrefix(response, "ChatGPT said:"))
+	}
+
+	// Remove "Thought for Xs" prefix if present
+	thoughtRegex := regexp.MustCompile(`^Thought for \d+s\s*`)
+	response = thoughtRegex.ReplaceAllString(response, "")
+
+	// Clean up extra whitespace but preserve structure for code/JSON
+	// Don't compress whitespace if it looks like code or JSON
+	if !strings.Contains(response, "{") && !strings.Contains(response, "```") {
+		response = regexp.MustCompile(`\s+`).ReplaceAllString(response, " ")
+	}
+	response = strings.TrimSpace(response)
+
+	if response == "" {
+		return "", fmt.Errorf("received empty response")
+	}
+
+	return response, nil
+}
+
+// SendMessage - backward compatibility wrapper
+func (c *ChatGPT) SendMessage(message string) (string, error) {
+	return c.SendMessageWithStreaming(message, nil)
+}
+
+// StartNewChat starts a new chat session
+func (c *ChatGPT) StartNewChat() error {
+	log.Println("✅ Starting new chat...")
+
+	err := chromedp.Run(c.Ctx,
+		chromedp.Click(NewChatXPath, chromedp.BySearch),
+		chromedp.Sleep(2*time.Second), // Wait for new chat to load
+	)
+	if err != nil {
+		return fmt.Errorf("failed to start new chat: %v", err)
+	}
+
+	log.Println("✅ New chat started")
+	return nil
+}
+
+// GetChatHistory gets the list of chat history
+func (c *ChatGPT) GetChatHistory() ([]ChatHistoryItem, error) {
+	log.Println("📜 Getting chat history...")
+
+	var historyItems []ChatHistoryItem
+
+	// Get all history links
+	var nodes []map[string]string
+	err := chromedp.Run(c.Ctx,
+		chromedp.AttributesAll(`#history a[href^="/c/"]`, &nodes, chromedp.ByQueryAll),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get history nodes: %v", err)
+	}
+
+	// Extract information from each history item
+	for i, attrs := range nodes {
+		if i >= 10 { // Limit to 10 recent chats
+			break
+		}
+
+		href := attrs["href"]
+		var title string
+		err = chromedp.Run(c.Ctx,
+			chromedp.Text(fmt.Sprintf(`#history a[href="%s"]`, href), &title, chromedp.ByQuery),
+		)
+		if err != nil {
+			log.Printf("Failed to get details for history item %d: %v", i, err)
+			continue
+		}
+
+		historyItems = append(historyItems, ChatHistoryItem{
+			Title: strings.TrimSpace(title),
+			URL:   "https://chatgpt.com" + href,
+			ID:    extractChatID(href),
+		})
+	}
+
+	log.Printf("📜 Found %d chat history items", len(historyItems))
+	return historyItems, nil
+}
+
+// OpenChat opens a specific chat by ID
+func (c *ChatGPT) OpenChat(chatID string) error {
+	log.Printf("📂 Opening chat: %s", chatID)
+
+	url := fmt.Sprintf("https://chatgpt.com/c/%s", chatID)
+	err := chromedp.Run(c.Ctx,
+		chromedp.Navigate(url),
+		chromedp.Sleep(3*time.Second), // Wait for chat to load
+	)
+	if err != nil {
+		return fmt.Errorf("failed to open chat: %v", err)
+	}
+
+	log.Println("✅ Chat opened")
+	return nil
+}
+
+// ChatHistoryItem represents a chat history item
+type ChatHistoryItem struct {
+	Title string
+	URL   string
+	ID    string
+}
+
+// Helper function to extract chat ID from href
+func extractChatID(href string) string {
+	parts := strings.Split(href, "/")
+	if len(parts) >= 3 && parts[1] == "c" {
+		return parts[2]
+	}
+	return ""
+}
+
+// WaitForPageLoad waits for ChatGPT to be ready
+func (c *ChatGPT) WaitForPageLoad() error {
+	// Just do a simple check - don't be too strict
+	err := chromedp.Run(c.Ctx,
+		chromedp.Sleep(2*time.Second), // Simple wait
+	)
+	return err
+}

@@ -1,0 +1,105 @@
+I’ll summarize the whole codebase and then explain why this approach tends to work on Shopee while a typical Python Selenium setup often doesn’t.
+
+Checklist
+
+Brief every file in the repo: Done
+Explain why this code “lepas” to scrape Shopee vs Selenium Python: Done
+Call out any gaps or quick improvements: Done
+Ringkas Projek
+High-level flow
+
+Ambil input kata kunci → buka Chrome headless (Chromedp) dengan flags anti-automation → load cookies pengguna (jika ada) → buka hasil carian Shopee → tunggu elemen produk muncul → scrape HTML penuh → parse guna goquery → simpan ke JSON → buat analisis asas (murah/mahal/top jualan).
+main.go
+Minta user enter keyword dan URL-encode.
+Setup Chrome via Chromedp with:
+headless true
+enable-automation false
+disable-blink-features=AutomationControlled
+window-size dan User-Agent “normal”
+Buat context browser yang panjang umur (1 instance untuk semua pages).
+Load cookies dari cookies.json (jika ada).
+Navigate ke search URL, sleep 3s, reload sekali (atasi “blank first paint”/challenge).
+Tunggu selector li.shopee-search-item-result__item. Jika tak muncul dalam 20s → anggap perlu login dan exit dengan mesej untuk run non-headless.
+Loop pages hingga config.MaxPagesToScrape:
+Navigate (kecuali page pertama).
+Tunggu selector produk, tambah delay kecil.
+Ambil OuterHTML seluruh dokumen.
+Parse guna scraper.ParseProducts.
+Simpan semua produk ke products.json.
+Panggil analysis.AnalyzeProducts untuk laporan ringkas (murah/mahal/top 20 jualan).
+Nota: Kod memuat cookies tetapi tidak menyimpan cookies selepas login. Ada helper SaveCookiesAction() dalam browser, tapi tak dipakai di main.go.
+
+browser.go
+LoadCookiesAction(): baca cookies.json → unmarshal ke []*network.CookieParam → network.SetCookies.
+SaveCookiesAction(): ambil cookies semasa dari browser → tulis ke cookies.json. (Tidak digunakan dalam main.go).
+WaitForLoginPageExitAction(): loop check URL hingga keluar dari /buyer/login (untuk manual login flow). (Juga tidak digunakan dalam main.go).
+scraper.go
+Product struct: Name, Price, Sold, Location, URL.
+ParseProducts(html): guna goquery untuk cari li.shopee-search-item-result__item.
+Nama: a > div.line-clamp-2
+Harga: gabung text dari div.truncate.flex.items-baseline span
+Sold: div[class*='min-h-4']
+Lokasi: div[class*='text-shopee-black54'] (ambil yang last)
+URL penuh: BaseURL + relative href
+Pulangkan slice produk.
+analysis.go
+AnalyzeProducts:
+Kira total.
+Susun mengikut harga (parse “RM”, koma, range).
+Cetak “Cheapest” dan “Most Expensive”.
+Susun mengikut jualan (parse “k”, “rb”, “sold/terjual”).
+Print Top 20 dalam jadual kemas (tabwriter).
+file.go
+Utility baca/tulis file, dan WriteJSONFile (marshal + indented).
+config.go
+Konfigurasi ringkas:
+CookiesFile = "cookies.json"
+OutputFile = "products.json"
+MaxPagesToScrape = 3
+BaseURL = "https://shopee.com.my"
+go.mod / go.sum
+Dependensi utama:
+chromedp (control Chrome via DevTools Protocol).
+goquery (DOM parsing macam jQuery untuk Go).
+cookies.json
+Contoh cookies aktif Shopee (SPC_*, GA, dsb.). Ini penting untuk kelihatan seperti sesi user sebenar.
+products.json
+Sampel output hasil scrape (name/price/sold/location/url).
+flow.txt
+Diagram mermaid untuk flow aplikasi.
+GEMINI.md
+Dokumen persona yang tidak berkaitan dengan scraper (tidak digunakan).
+Kenapa kod ini “lepas” scrape Shopee, tapi Selenium Python anda tak lepas?
+Ringkasnya: kombinasi fingerprint yang lebih “natural”, sesi cookies sebenar, dan timing yang betul.
+
+Guna Chromedp (CDP) dengan flags anti-automation
+
+enable-automation=false dan disable-blink-features=AutomationControlled kurangkan tanda-tanda automation (contoh navigator.webdriver).
+User-Agent “biasa”, window-size realistik.
+Headless moden Chrome sangat hampir dengan non-headless; reload awal membantu bila ada challenge/render delay.
+Sesi cookies “nyata”
+
+cookies.json mengandungi cookies Shopee (SPC_*, csrf, GA, dsb.). Ini buat sesi nampak macam user biasa yang pernah melawat/log masuk.
+Tanpa cookies ini, Shopee lebih mudah trigger login/challenge/blank content.
+Taktik loading yang stabil
+
+Single browser context sepanjang proses (stabilkan identiti sesi).
+WaitVisible untuk selector hasil sebelum scrape.
+OuterHTML("html") ambil DOM yang sudah render, bukan direct API panggilan yang mungkin dilindungi.
+Mengapa Selenium Python sering gagal?
+
+Fingerprint automation default
+navigator.webdriver = true, argumen driver default, atau headless lama → mudah dikesan.
+Tiada cookies/sesi yang valid
+Jika start “kosong”, Shopee kerap minta login/challenge.
+Timing SPA
+Shopee heavy client-side rendering; jika tidak tunggu selector yang tepat, anda dapat HTML kosong atau skeleton.
+Login flow tidak diurus
+Tanpa manual login + simpan cookies/profile, sesi baharu cenderung disekat.
+Peringatan ringkas
+
+Hormati T&C/robots.txt laman. Shopee ada perlindungan anti-bot yang boleh berubah; kejayaan tidak dijamin konsisten.
+Kekurangan kecil dan cepat baik pulih
+Simpan cookies selepas login pertama:
+Kod sudah ada SaveCookiesAction() dan WaitForLoginPageExitAction(), tapi belum digunakan di main.go. Jika anda mahu, saya boleh wire:
+Run non-headless → navigate login → WaitForLoginPageExitAction() → SaveCookiesAction() → next run boleh headless sepenuhnya
