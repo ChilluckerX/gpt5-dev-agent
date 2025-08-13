@@ -111,4 +111,36 @@ go run main.go
 5. **History access** - Browse previous chats
 6. **New conversations** - Start fresh anytime
 
+## 🤝 Contributing
+
+We welcome contributions to improve this ChatGPT CLI tool! Whether you're fixing bugs, adding new features, or improving documentation, your help is appreciated.
+
+### How to Contribute:
+
+1. **Fork the repository** on GitHub
+2. **Create a feature branch**: `git checkout -b feature/your-feature-name`
+3. **Make your changes** and test them thoroughly
+4. **Commit your changes**: `git commit -m "Add your descriptive commit message"`
+5. **Push to your branch**: `git push origin feature/your-feature-name`
+6. **Open a Pull Request** with a clear description of your changes
+
+### What We're Looking For:
+
+- 🐛 **Bug fixes** - Help us squash those pesky bugs
+- ✨ **New features** - Enhance the CLI experience
+- 📚 **Documentation** - Improve README, code comments, or add examples
+- 🔧 **Performance improvements** - Make it faster and more efficient
+- 🧪 **Tests** - Add test coverage for better reliability
+
+### Guidelines:
+
+- Follow Go best practices and conventions
+- Test your changes before submitting
+- Keep commits focused and descriptive
+- Update documentation if needed
+
+### Questions or Ideas?
+
+Feel free to open an issue to discuss new features, report bugs, or ask questions. We're happy to help and collaborate!
+
 ---
