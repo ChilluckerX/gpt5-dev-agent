@@ -1,0 +1,42 @@
+{
+  "input": {
+    "primary": "#prompt-textarea",
+    "fallback": [
+      "textarea[placeholder*='Message']",
+      "textarea[data-id='root']",
+      "[contenteditable='true'][data-testid*='textbox']"
+    ]
+  },
+  "send_button": {
+    "primary": "[data-testid='send-button']",
+    "fallback": [
+      "button[aria-label*='Send']",
+      "button:has(svg[data-icon='send'])",
+      "[data-testid='fruitjuice-send-button']"
+    ]
+  },
+  "response": {
+    "container": "[data-message-author-role='assistant']",
+    "content": "[data-message-author-role='assistant'] .markdown",
+    "fallback": [
+      ".group\\/conversation-turn .markdown",
+      "[data-testid*='conversation-turn-'] .markdown"
+    ]
+  },
+  "chat_controls": {
+    "new_chat": "a[href='/']",
+    "stop_generating": "[aria-label*='Stop']",
+    "regenerate": "[aria-label*='Regenerate']"
+  },
+  "page_elements": {
+    "chat_list": "[data-testid='conversation-turn-']",
+    "sidebar": "[data-testid='sidebar']",
+    "main_content": "main",
+    "loading_indicator": "[data-testid*='loading']"
+  },
+  "authentication": {
+    "login_button": "[data-testid='login-button']",
+    "signup_button": "[data-testid='signup-button']",
+    "user_menu": "[data-testid='user-menu']"
+  }
+}

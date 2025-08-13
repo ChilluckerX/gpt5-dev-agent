@@ -7,8 +7,11 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/chatgpt-element-recorder/pkg/config"
+	"github.com/chatgpt-element-recorder/pkg/ui"
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 )
@@ -30,21 +33,55 @@ type ChatGPTCookie struct {
 
 func LoadCookiesAction() chromedp.Action {
 	return chromedp.ActionFunc(func(ctx context.Context) error {
-		cookiesData, err := os.ReadFile(config.CookiesFile)
+		// Create cookie manager
+		cookieManager := NewCookieManager()
+		
+		// Ensure cookies file exists and is valid
+		if err := cookieManager.EnsureCookiesFile(); err != nil {
+			ui.PrintWarning(fmt.Sprintf("Cookie validation failed: %v", err))
+			return nil // Continue without cookies
+		}
+		
+		// Load validated cookies using legacy format for compatibility
+		cookiesData, err := os.ReadFile(cookieManager.GetCookiesPath())
 		if os.IsNotExist(err) {
-			// No cookies file - continue silently
+			ui.PrintInfo("No cookies file found - manual login required")
 			return nil
 		} else if err != nil {
-			return err
+			ui.PrintWarning(fmt.Sprintf("Failed to read cookies: %v", err))
+			return nil
 		}
 
+		// Try to parse as legacy ChatGPTCookie format first
 		var chatgptCookies []ChatGPTCookie
 		if err := json.Unmarshal(cookiesData, &chatgptCookies); err != nil {
-			return err
+			ui.PrintWarning("Invalid cookie format - manual login required")
+			return nil
 		}
 
+		if len(chatgptCookies) == 0 {
+			ui.PrintInfo("No cookies to load - manual login required")
+			return nil
+		}
+
+		// Convert to network.CookieParam and validate
 		var cookies []*network.CookieParam
+		validCookieCount := 0
+		expiredCookieCount := 0
+		currentTime := float64(time.Now().Unix())
+
 		for _, cookie := range chatgptCookies {
+			// Check if cookie is expired
+			if cookie.ExpirationDate > 0 && cookie.ExpirationDate < currentTime {
+				expiredCookieCount++
+				continue // Skip expired cookies
+			}
+
+			// Only load ChatGPT-related cookies
+			if !isChatGPTDomain(cookie.Domain) {
+				continue
+			}
+
 			cookieParam := &network.CookieParam{
 				Name:     cookie.Name,
 				Value:    cookie.Value,
@@ -54,9 +91,13 @@ func LoadCookiesAction() chromedp.Action {
 				HTTPOnly: cookie.HTTPOnly,
 			}
 
-			// Skip expiry handling to avoid compatibility issues
-			// Cookies will still work without explicit expiry dates
+			// Set expiry if available
+			if cookie.ExpirationDate > 0 {
+				expires := cdp.TimeSinceEpoch(time.Unix(int64(cookie.ExpirationDate), 0))
+				cookieParam.Expires = &expires
+			}
 
+			// Set SameSite attribute
 			switch strings.ToLower(cookie.SameSite) {
 			case "strict":
 				cookieParam.SameSite = network.CookieSameSiteStrict
@@ -67,11 +108,45 @@ func LoadCookiesAction() chromedp.Action {
 			}
 
 			cookies = append(cookies, cookieParam)
+			validCookieCount++
 		}
 
-		// Cookies loaded silently for clean UI
-		return network.SetCookies(cookies).Do(ctx)
+		// Report cookie loading status
+		if expiredCookieCount > 0 {
+			ui.PrintWarning(fmt.Sprintf("Skipped %d expired cookies", expiredCookieCount))
+		}
+
+		if validCookieCount == 0 {
+			ui.PrintWarning("No valid ChatGPT cookies found - manual login required")
+			return nil
+		}
+
+		// Load cookies into browser
+		if err := network.SetCookies(cookies).Do(ctx); err != nil {
+			ui.PrintWarning(fmt.Sprintf("Failed to load cookies: %v", err))
+			return nil
+		}
+
+		ui.PrintSuccess(fmt.Sprintf("Loaded %d ChatGPT cookies", validCookieCount))
+		return nil
 	})
+}
+
+// isChatGPTDomain checks if domain belongs to ChatGPT
+func isChatGPTDomain(domain string) bool {
+	chatgptDomains := []string{
+		"chatgpt.com",
+		".chatgpt.com", 
+		"chat.openai.com",
+		".openai.com",
+	}
+	
+	for _, chatgptDomain := range chatgptDomains {
+		if domain == chatgptDomain {
+			return true
+		}
+	}
+	return false
 }
 
 // SaveCookiesAction retrieves cookies from the browser and saves them to a file.

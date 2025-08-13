@@ -9,7 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chatgpt-element-recorder/pkg/agent"
+	"github.com/chatgpt-element-recorder/pkg/browser"
 	"github.com/chatgpt-element-recorder/pkg/chatgpt"
+	"github.com/chatgpt-element-recorder/pkg/config"
 	"github.com/chatgpt-element-recorder/pkg/ui"
 )
 
@@ -17,13 +20,32 @@ import (
 type CLI struct {
 	chatgpt *chatgpt.ChatGPT
 	scanner *bufio.Scanner
+	agent   *agent.Agent // Agent system integration
+	config  *config.DynamicConfig
 }
 
 // NewCLI creates a new CLI instance
 func NewCLI(chatgptClient *chatgpt.ChatGPT) *CLI {
+	// Load dynamic configuration
+	config, err := config.LoadDynamicConfig()
+	if err != nil {
+		// Use default config if loading fails
+		ui.PrintWarning("Could not load configuration, using defaults")
+	}
+	
+	// Create agent instance
+	agentInstance, err := agent.NewAgent(chatgptClient)
+	if err != nil {
+		// Continue without agent if creation fails
+		ui.PrintWarning("Could not initialize agent system")
+		agentInstance = nil
+	}
+	
 	return &CLI{
 		chatgpt: chatgptClient,
 		scanner: bufio.NewScanner(os.Stdin),
+		agent:   agentInstance,
+		config:  config,
 	}
 }
 
@@ -118,6 +140,13 @@ func (cli *CLI) handleCommand(command string) error {
 
 	case "/clear", "/cls":
 		ui.ClearScreen()
+
+	case "/cookies", "/c":
+		if len(parts) < 2 {
+			fmt.Println("❌ Usage: /cookies <validate|clean|status>")
+			return nil
+		}
+		return cli.handleCookies(parts[1])
 
 	default:
 		fmt.Printf("❌ Unknown command: %s\n", cmd)
@@ -430,4 +459,64 @@ func (cli *CLI) sendSystemPromptForNewChat() error {
 	
 	ui.PrintSuccess("Project context established! 🎯")
 	return nil
+}
+
+
+// handleCookies handles cookie management commands
+func (cli *CLI) handleCookies(action string) error {
+	cookieManager := browser.NewCookieManager()
+	
+	switch strings.ToLower(action) {
+	case "validate", "v":
+		spinner := ui.NewSquareSpinner()
+		spinner.Start("Validating cookies...")
+		err := cookieManager.EnsureCookiesFile()
+		spinner.Stop()
+		if err != nil {
+			ui.PrintError(fmt.Sprintf("Cookie validation failed: %v", err))
+		} else {
+			ui.PrintSuccess("Cookies validation completed!")
+		}
+		return nil
+		
+	case "clean", "c":
+		spinner := ui.NewSquareSpinner()
+		spinner.Start("Cleaning expired cookies...")
+		err := cookieManager.CleanExpiredCookies()
+		spinner.Stop()
+		if err != nil {
+			ui.PrintError(fmt.Sprintf("Failed to clean cookies: %v", err))
+		} else {
+			ui.PrintSuccess("Cookie cleanup completed!")
+		}
+		return nil
+		
+	case "status", "s":
+		fmt.Println("\n🍪 Cookie Status:")
+		ui.PrintSeparator()
+		fmt.Printf("📁 Cookies file: %s\n", cookieManager.GetCookiesPath())
+		
+		if _, err := os.Stat(cookieManager.GetCookiesPath()); os.IsNotExist(err) {
+			fmt.Println("❌ Cookies file does not exist")
+			fmt.Println("💡 Run \"/cookies validate\" to create it")
+		} else {
+			cookies, err := cookieManager.LoadCookies()
+			if err != nil {
+				ui.PrintError(fmt.Sprintf("Failed to load cookies: %v", err))
+			} else if len(cookies) == 0 {
+				fmt.Println("❌ No cookies found")
+				fmt.Println("💡 You may need to login to ChatGPT manually")
+			} else {
+				fmt.Printf("📊 Total cookies: %d\n", len(cookies))
+				fmt.Println("✅ Cookies file is valid")
+			}
+		}
+		ui.PrintSeparator()
+		return nil
+		
+	default:
+		fmt.Printf("❌ Unknown cookie action: %s\n", action)
+		fmt.Println("💡 Available actions: validate, clean, status")
+		return nil
+	}
 }

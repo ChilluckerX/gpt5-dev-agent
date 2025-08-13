@@ -1,2 +1,5 @@
 *.exe
 .env
+chatgpt.json
+backups/
+recorder/

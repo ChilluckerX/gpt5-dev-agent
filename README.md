@@ -73,45 +73,7 @@ go run main.go
 └── manual_fetch.txt          # Manual selectors reference
 ```
 
-## 🎯 Manual Selectors Used
-
-From `manual_fetch.txt`:
-
-- **Input**: `#prompt-textarea`
-- **Submit**: `#composer-submit-button` 
-- **Response**: `#thread > div > div.relative...`
-- **New Chat**: `#stage-slideover-sidebar > div > div.opacity...`
-- **History**: `#history`
-
-## 🔑 Key Go Scraper Techniques
-
-### 1. **Anti-Automation Flags**
-```go
-chromedp.Flag("enable-automation", false)
-chromedp.Flag("disable-blink-features", "AutomationControlled")
-```
-
-### 2. **Reload Trick**
-```go
-chromedp.Navigate(targetURL)
-time.Sleep(3 * time.Second)
-chromedp.Reload() // Handle challenges
-```
-
-### 3. **Cookie Loading**
-```go
-browser.LoadCookiesAction() // Load real session
-```
-
-### 4. **XPath Selectors**
-```go
-chromedp.SendKeys(`//*[@id="prompt-textarea"]`, message, chromedp.BySearch)
-chromedp.Click(`//*[@id="composer-submit-button"]`, chromedp.BySearch)
-```
-
 ## 💡 Usage Tips
-
-- **Keep browser visible** - CLI needs browser window open
 - **Valid cookies** - Ensure `cookies/chatgpt.json` has valid session
 - **Manual login** - Login manually first if cookies expired
 - **Wait for responses** - CLI waits for ChatGPT to respond
@@ -124,17 +86,10 @@ chromedp.Click(`//*[@id="composer-submit-button"]`, chromedp.BySearch)
 # Check if cookies are valid
 ```
 
-### Selector Issues:
-```bash
-# Selectors are from manual_fetch.txt
-# If ChatGPT UI changes, update selectors
-```
-
 ### Connection Issues:
 ```bash
 # Check internet connection
 # Verify ChatGPT is accessible
-# Try manual login first
 ```
 
 ## 🆚 Advantages Over Python
@@ -156,14 +111,4 @@ chromedp.Click(`//*[@id="composer-submit-button"]`, chromedp.BySearch)
 5. **History access** - Browse previous chats
 6. **New conversations** - Start fresh anytime
 
-## 🇲🇾 Success Factors
-
-- **Manual selectors** - Proven to work
-- **Go scraper techniques** - Bypass detection
-- **Real cookies** - Maintain session
-- **CLI interface** - Easy to use
-- **Reliable automation** - Stable performance
-
 ---
-
-**🚀 Ready untuk real ChatGPT CLI automation dengan Go power!**

@@ -1,0 +1,39 @@
+{
+  "chatgpt": {
+    "base_url": "https://chatgpt.com",
+    "timeout": 600,
+    "retry_attempts": 3,
+    "wait_timeout": 60
+  },
+  "browser": {
+    "headless": false,
+    "window_size": "1920,1080",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "disable_automation": true,
+    "disable_extensions": false
+  },
+  "files": {
+    "cookies_file": "cookies/chatgpt.json",
+    "output_dir": "output",
+    "config_dir": "configs"
+  },
+  "ui": {
+    "spinner_type": "square",
+    "typing_speed": 30,
+    "border_speed": 10,
+    "colors": {
+      "success": "\u001b[32m",
+      "error": "\u001b[31m",
+      "warning": "\u001b[33m",
+      "info": "\u001b[36m",
+      "dim": "\u001b[2m",
+      "reset": "\u001b[0m"
+    }
+  },
+  "agent": {
+    "mode": "interactive",
+    "auto_context": true,
+    "project_analysis": true,
+    "session_persistence": true
+  }
+}
