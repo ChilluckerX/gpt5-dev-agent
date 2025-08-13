@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -29,6 +30,11 @@ func NewCLI(chatgptClient *chatgpt.ChatGPT) *CLI {
 // Start starts the CLI interface
 func (cli *CLI) Start() error {
 	cli.printWelcome()
+	
+	// Auto-send system prompt for initial context
+	if err := cli.sendSystemPromptForNewChat(); err != nil {
+		ui.PrintWarning("Could not establish initial project context")
+	}
 
 	for {
 		fmt.Print("\n> ")
@@ -86,10 +92,15 @@ func (cli *CLI) handleCommand(command string) error {
 		spinner.Start("Starting new chat...")
 		err := cli.chatgpt.StartNewChat()
 		spinner.Stop()
-		if err == nil {
-			ui.PrintSuccess("New chat started")
+		
+		if err != nil {
+			return err
 		}
-		return err
+		
+		ui.PrintSuccess("New chat started")
+		
+		// Auto-send system prompt with project context
+		return cli.sendSystemPromptForNewChat()
 
 	case "/history", "/hist":
 		return cli.showHistory()
@@ -264,4 +275,159 @@ func (cli *CLI) printResponse(response string) {
 // clearScreen clears the terminal screen (deprecated - use ui.ClearScreen)
 func (cli *CLI) clearScreen() {
 	ui.ClearScreen()
+}
+
+// generateSystemPrompt creates a system prompt with project context
+func (cli *CLI) generateSystemPrompt() string {
+	currentDir, _ := os.Getwd()
+	
+	// Analyze project structure
+	projectInfo := cli.analyzeProjectStructure()
+	
+	systemPrompt := fmt.Sprintf(`You are GPT5-DEV, a friendly and expert software development assistant. You're helping a developer who is currently working in the directory: %s
+
+Project Analysis:
+%s
+
+Your role:
+- Act as a knowledgeable coding assistant and mentor
+- Provide helpful suggestions based on the project structure you see
+- Be conversational and friendly, like a senior developer colleague
+- Ask intelligent follow-up questions about their work
+- Offer specific help based on the technologies and files you observe
+
+Please greet the user by acknowledging what you see in their project and ask how you can help them today. Be specific about what you notice in their codebase.`, currentDir, projectInfo)
+
+	return systemPrompt
+}
+
+// analyzeProjectStructure analyzes the current directory and returns project info
+func (cli *CLI) analyzeProjectStructure() string {
+	var analysis strings.Builder
+	currentDir, _ := os.Getwd()
+	
+	// Get directory name
+	projectName := filepath.Base(currentDir)
+	analysis.WriteString(fmt.Sprintf("Project: %s\n", projectName))
+	
+	// Analyze files and folders
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		analysis.WriteString("Unable to read directory structure\n")
+		return analysis.String()
+	}
+	
+	var files []string
+	var folders []string
+	var configFiles []string
+	var codeFiles []string
+	
+	for _, entry := range entries {
+		name := entry.Name()
+		
+		// Skip hidden files and common ignore patterns
+		if strings.HasPrefix(name, ".") && name != ".env" && name != ".gitignore" {
+			continue
+		}
+		
+		if entry.IsDir() {
+			folders = append(folders, name)
+		} else {
+			files = append(files, name)
+			
+			// Categorize files
+			ext := strings.ToLower(filepath.Ext(name))
+			switch {
+			case name == "go.mod" || name == "package.json" || name == "requirements.txt" || name == "Cargo.toml" || name == "pom.xml":
+				configFiles = append(configFiles, name)
+			case ext == ".go" || ext == ".py" || ext == ".js" || ext == ".ts" || ext == ".java" || ext == ".rs" || ext == ".cpp" || ext == ".c":
+				codeFiles = append(codeFiles, name)
+			case name == "README.md" || name == "Dockerfile" || name == ".gitignore":
+				configFiles = append(configFiles, name)
+			}
+		}
+	}
+	
+	// Build analysis
+	if len(configFiles) > 0 {
+		analysis.WriteString(fmt.Sprintf("Config files: %s\n", strings.Join(configFiles, ", ")))
+	}
+	
+	if len(codeFiles) > 0 {
+		analysis.WriteString(fmt.Sprintf("Code files: %s\n", strings.Join(codeFiles, ", ")))
+	}
+	
+	if len(folders) > 0 {
+		analysis.WriteString(fmt.Sprintf("Directories: %s\n", strings.Join(folders, ", ")))
+	}
+	
+	// Detect project type
+	projectType := cli.detectProjectType(configFiles, codeFiles)
+	if projectType != "" {
+		analysis.WriteString(fmt.Sprintf("Detected: %s project\n", projectType))
+	}
+	
+	return analysis.String()
+}
+
+// detectProjectType tries to determine the project type based on files
+func (cli *CLI) detectProjectType(configFiles, codeFiles []string) string {
+	// Check config files first
+	for _, file := range configFiles {
+		switch file {
+		case "go.mod":
+			return "Go"
+		case "package.json":
+			return "Node.js/JavaScript"
+		case "requirements.txt", "setup.py":
+			return "Python"
+		case "Cargo.toml":
+			return "Rust"
+		case "pom.xml":
+			return "Java/Maven"
+		case "Dockerfile":
+			return "Docker"
+		}
+	}
+	
+	// Check code files
+	for _, file := range codeFiles {
+		ext := strings.ToLower(filepath.Ext(file))
+		switch ext {
+		case ".go":
+			return "Go"
+		case ".py":
+			return "Python"
+		case ".js", ".ts":
+			return "JavaScript/TypeScript"
+		case ".java":
+			return "Java"
+		case ".rs":
+			return "Rust"
+		case ".cpp", ".c":
+			return "C/C++"
+		}
+	}
+	
+	return ""
+}
+
+// sendSystemPromptForNewChat sends system prompt when starting new chat
+func (cli *CLI) sendSystemPromptForNewChat() error {
+	systemPrompt := cli.generateSystemPrompt()
+	
+	spinner := ui.NewSquareSpinner()
+	spinner.Start("Analyzing project and setting up context...")
+	
+	// Send system prompt
+	_, err := cli.chatgpt.SendMessage(systemPrompt)
+	spinner.Stop()
+	
+	if err != nil {
+		ui.PrintWarning("Could not set up project context")
+		return err
+	}
+	
+	ui.PrintSuccess("Project context established! 🎯")
+	return nil
 }

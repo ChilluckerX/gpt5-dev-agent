@@ -397,7 +397,7 @@ func PrintWelcome() {
 	if err != nil {
 		currentDir = "Unknown"
 	}
-	
+
 	fmt.Println(Purple + "💡 Commands:" + Reset)
 	fmt.Println("  " + Cyan + "/help" + Reset + "    - Show help")
 	fmt.Println("  " + Cyan + "/new" + Reset + "     - Start new chat")
@@ -406,5 +406,6 @@ func PrintWelcome() {
 	fmt.Println("  " + Cyan + "/quit" + Reset + "    - Exit")
 	fmt.Println()
 	fmt.Println(Green + "💬 Just type your message to chat with ChatGPT!" + Reset)
+	fmt.Println("Model: " + Cyan + "GPT5" + Reset)
 	fmt.Println(Dim + "📁 Working in: " + currentDir + Reset)
 }
